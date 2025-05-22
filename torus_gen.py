@@ -101,7 +101,7 @@ def generate_torus(num=99):
         print(bump_height)
         
         # randomize bump angle within interval
-        # TODO: change to random selection?
+        # TODO: change to random selection? change to centred around points?
         mod = i % 3
         if (mod == 0):      angle = random.uniform(0, 2*np.pi/3)
         elif (mod == 1):    angle = random.uniform(2*np.pi/3, 4*np.pi/3)
