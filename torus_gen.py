@@ -9,7 +9,7 @@ torus_gen.py  - simple script to generate torus data with variations in torus
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence, Khoi Nguyen Xuan
-Last Modified:  May 20, 2025
+Last Modified:  May 30, 2025
 '''
 # necessary packages for implementation - Khoi
 import os, sys 
@@ -90,8 +90,16 @@ def generate_torus(num=99):
     coords = np.linspace(-1, 1, resolution)
     #Create a 3D grid with coords above 
     x = np.stack(np.meshgrid(coords, coords, coords)) # x.shape = (3, 100, 100, 100)
+
+    # Generate standard Torus for displacement comparison
+    sdf_standard = sdf_torus(x, radius, thickness)
+    verts_standard, faces_standard, normals_standard, _ = measure.marching_cubes(sdf_standard, level=0)
     
-    for i in range(num):#enumerate(np.linspace(-1.0, 1.0, num)):
+    # Save as PLY
+    mesh = trimesh.Trimesh(vertices=verts_standard, faces=faces_standard, process=False)
+    mesh.export(os.path.join(out_dir, f"torus_000.ply"))
+    
+    for i in range(1, num+1):#enumerate(np.linspace(-1.0, 1.0, num)):
         # randomize noise and bump size
         noise_scale = random.randint(18, 22)
         noise_strength = random.randint(6, 12)
@@ -103,9 +111,12 @@ def generate_torus(num=99):
         # randomize bump angle within interval
         # TODO: change to random selection? change to centred around points?
         mod = i % 3
-        if (mod == 0):      angle = random.uniform(0, 2*np.pi/3)
-        elif (mod == 1):    angle = random.uniform(2*np.pi/3, 4*np.pi/3)
-        else:               angle = random.uniform(2*np.pi/3, 6*np.pi/3)
+        if (mod == 0):      angle_centre = 0
+        elif (mod == 1):    angle_centre = 2*np.pi/3
+        else:               angle_centre = 4*np.pi/3
+        
+        delta = np.pi/24
+        angle = random.uniform(angle_centre - delta, angle_centre + delta)
         
         # Base torus SDF
         sdf = sdf_torus(x, radius, thickness)
