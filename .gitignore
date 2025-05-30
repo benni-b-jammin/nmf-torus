@@ -1,2 +1,4 @@
 # .gitignore excludes all generated torus data files
-.ply
+*.ply
+*.swp
+__pychache__/*
