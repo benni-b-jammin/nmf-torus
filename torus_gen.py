@@ -99,7 +99,7 @@ def generate_torus(num=99):
     mesh = trimesh.Trimesh(vertices=verts_standard, faces=faces_standard, process=False)
     mesh.export(os.path.join(out_dir, f"torus_000.ply"))
     
-    for i in range(1, num+1):#enumerate(np.linspace(-1.0, 1.0, num)):
+    for i in range(num):#enumerate(np.linspace(-1.0, 1.0, num)):
         # randomize noise and bump size
         noise_scale = random.randint(18, 22)
         noise_strength = random.randint(6, 12)
@@ -108,13 +108,8 @@ def generate_torus(num=99):
         bump_height = round(random.uniform(20.0, 30.0), 1)
         print(bump_height)
         
-        # randomize bump angle within interval
-        # TODO: change to random selection? change to centred around points?
-        mod = i % 3
-        if (mod == 0):      angle_centre = 0
-        elif (mod == 1):    angle_centre = 2*np.pi/3
-        else:               angle_centre = 4*np.pi/3
-        
+        # TODO: randomize bump angle within interval
+        angle_centre = (2*np.pi/3) * (i % 3)
         delta = np.pi/24
         angle = random.uniform(angle_centre - delta, angle_centre + delta)
         
@@ -139,7 +134,7 @@ def generate_torus(num=99):
             
         # Save as PLY
         mesh = trimesh.Trimesh(vertices=warped_verts, faces=faces, process=False)
-        mesh.export(os.path.join(out_dir, f"torus_{i:03d}.ply"))
+        mesh.export(os.path.join(out_dir, f"torus_{(i+1):03d}.ply"))
 
 
 if __name__ == "__main__":
