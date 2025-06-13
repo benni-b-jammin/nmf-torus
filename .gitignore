@@ -2,5 +2,6 @@
 *.ply
 *.swp
 */__pychache__/*
+*.pyc
 *.png
 *.npy
