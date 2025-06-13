@@ -9,7 +9,7 @@ torus_gen.py  - simple script to generate torus data with variations in torus
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence, Khoi Nguyen Xuan
-Last Modified:  May 30, 2025
+Last Modified:  Jun 06, 2025
 '''
 # necessary packages for implementation - Khoi
 import os, sys 
@@ -99,7 +99,7 @@ def generate_torus(num=99):
     mesh = trimesh.Trimesh(vertices=verts_standard, faces=faces_standard, process=False)
     mesh.export(os.path.join(out_dir, f"torus_000.ply"))
     
-    for i in range(num):#enumerate(np.linspace(-1.0, 1.0, num)):
+    for i in range(num):
         # randomize noise and bump size
         noise_scale = random.randint(18, 22)
         noise_strength = random.randint(6, 12)
@@ -134,7 +134,7 @@ def generate_torus(num=99):
             
         # Save as PLY
         mesh = trimesh.Trimesh(vertices=warped_verts, faces=faces, process=False)
-        mesh.export(os.path.join(out_dir, f"torus_{(i+1):03d}.ply"))
+        mesh.export(os.path.join(out_dir, f"torus_{(i+1):03d}_{i%3}.ply"))
 
 
 if __name__ == "__main__":
