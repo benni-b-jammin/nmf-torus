@@ -221,6 +221,7 @@ def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path=".
         bump_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
 
     # Generate combined torus (heatmap mean of all components)
+    # TODO: fix to display all 3, not just the mean
     combined_displacements = np.mean(H, axis=0)
     bump_verts = ref_verts + (ref_normals * displacements[:, np.newaxis])
     bump_mesh = trimesh.Trimesh(vertices=bump_verts, faces=faces)
@@ -232,6 +233,9 @@ def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path=".
 def evaluate_nmf_labels(T, W, H, labels, filenames):
     '''
     Compare ground truth labels derived from filenames against NMF-inferred labels
+
+    NMF labels may be in a different order to those of input ground truth -
+    manual visual inspection of component tori is required
     '''
     # obtain ground truth & predicted labels
     try:
@@ -239,26 +243,20 @@ def evaluate_nmf_labels(T, W, H, labels, filenames):
     except KeyError as e:
         print(f"Error: Filename {e} not found!")
         return
-    predicted_labels = np.argmax(W, axis=1)
+    initial_labels = np.argmax(W, axis=1)
+        
+    # reorder predicted labels - map initial labels to actual labels
+    print("=== Mapping Predicted Labels ===\nPlease visually inspect the component tori" \
+          " and map their original labels to their current position as determined" \
+          " by the NMF:")
+    component_to_label = defaultdict(int)
+    k = H.shape[0]
+    for i in range(k):
+        component_to_label[i] = int(input(f"{i} -> "))
     
-    # Confusion matrix (unpermuted) to determine best label alignment
-    raw_cm = confusion_matrix(ground_truth, predicted_labels)
-    print("\nConfusion Matrix before label adjustments: ")
-    print(raw_cm)
-    print("Use Hungarian algorithm to correct labels")
-
-    # Use Hungarian algorithm to find best label permutation
-    cost_matrix = -raw_cm  # maximize correct predictions
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
-    # Build mapping from predicted -> actual labels
-    label_mapping = {pred_label: true_label for pred_label, true_label in zip(col_ind, row_ind)}
-
-    # Apply remapping
-    predicted_labels = [label_mapping[label] for label in predicted_labels]
+    predicted_labels = [component_to_label[initial] for initial in initial_labels] 
     
     # one-hot encode labels (for AUC)
-    k = H.shape[0]
     onehot_gt = np.zeros((len(ground_truth), k))
     for i, label in enumerate(ground_truth):
         onehot_gt[i][label] = 1
