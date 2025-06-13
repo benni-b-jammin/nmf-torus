@@ -9,7 +9,7 @@ torus_gen.py  - simple script to generate torus data with variations in torus
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence, Khoi Nguyen Xuan
-Last Modified:  Jun 06, 2025
+Last Modified:  Jun 13, 2025
 '''
 # necessary packages for implementation - Khoi
 import os, sys 
@@ -83,7 +83,6 @@ def generate_torus(num=99):
     # some parameters; TODO: add more variability
     resolution = 100
     radius = 0.25
-    thickness = 0.1
     seed = 42
     
     #Create an array of 100 points from -1 to 1 
@@ -92,7 +91,7 @@ def generate_torus(num=99):
     x = np.stack(np.meshgrid(coords, coords, coords)) # x.shape = (3, 100, 100, 100)
 
     # Generate standard Torus for displacement comparison
-    sdf_standard = sdf_torus(x, radius, thickness)
+    sdf_standard = sdf_torus(x, radius, 0.1)
     verts_standard, faces_standard, normals_standard, _ = measure.marching_cubes(sdf_standard, level=0)
     
     # Save as PLY
@@ -100,22 +99,25 @@ def generate_torus(num=99):
     mesh.export(os.path.join(out_dir, f"torus_000.ply"))
     
     for i in range(num):
-        # randomize noise and bump size
+        # randomize noise, bump_size, thickness
         noise_scale = random.randint(18, 22)
         noise_strength = random.randint(6, 12)
         bump_width = round(random.uniform(0.005, 0.015), 3)
-        print(bump_width)
-        bump_height = round(random.uniform(20.0, 30.0), 1)
-        print(bump_height)
+        bump_height = round(random.uniform(10.0, 25.0), 1)
+        thickness = round(random.uniform(0.05, 0.15), 2)
         
         # TODO: randomize bump angle within interval
         angle_centre = (2*np.pi/3) * (i % 3)
         delta = np.pi/24
         angle = random.uniform(angle_centre - delta, angle_centre + delta)
         
-        # Base torus SDF
-        sdf = sdf_torus(x, radius, thickness)
-        verts, faces, normals, values = measure.marching_cubes(sdf, level=0)
+        # Displace vertices of base mesh instead of remeshing:
+        verts = verts_standard.copy()
+        normals = normals_standard.copy()
+
+        # Thickness displacement: move vertices along normals scaled by thickness difference
+        thickness_displacement = (thickness - 0.1)  # relative to base thickness 0.1
+        verts += normals * thickness_displacement    
     
         # Noise field
         x_warp = gradient_noise(x, noise_scale, noise_strength, seed)
@@ -131,11 +133,10 @@ def generate_torus(num=99):
         vertex_noise = interpn([np.arange(resolution)] * 3, x_warp, verts, bounds_error=False, fill_value=0)
         vertex_noise = np.nan_to_num(vertex_noise)
         warped_verts = verts + vertex_noise
-            
+        
         # Save as PLY
-        mesh = trimesh.Trimesh(vertices=warped_verts, faces=faces, process=False)
+        mesh = trimesh.Trimesh(vertices=warped_verts, faces=faces_standard, process=False)
         mesh.export(os.path.join(out_dir, f"torus_{(i+1):03d}_{i%3}.ply"))
-
 
 if __name__ == "__main__":
     generate_torus(6)

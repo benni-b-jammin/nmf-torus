@@ -39,7 +39,7 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  Jun 06, 2025
+Last Modified:  Jun 13, 2025
 '''
 import numpy as np
 from sklearn.preprocessing import normalize
@@ -115,8 +115,6 @@ def main ():
 
     
         
-        
-    
 def create_T_matrix(matrix_name, labels, filenames):
     ''' 
     Creates T matrix using signed displacement values (relative to the first torus in the dataset).
@@ -127,7 +125,7 @@ def create_T_matrix(matrix_name, labels, filenames):
     matrix = None       # initialized - adjusted to np.array on first loop
     torus_dir = os.fsencode(torus_dir_str)
     if not (os.path.exists(os.path.join(torus_dir_str, "torus_000.ply"))):
-        print("No torus files - generating")
+        print("No torus files - generating...")
         torus_gen.generate_torus()
     
     ply_files = sorted([
@@ -154,10 +152,14 @@ def create_T_matrix(matrix_name, labels, filenames):
         try:
             mesh = trimesh.load_mesh(filepath)
             verts_warped = mesh.vertices
+            
+            # normalize thickness to reduce influence
+            # verts_warped = normalize_torus_thickness(verts_warped)
 
             # determines signed displacements - uses only positive values
             displacement_vectors = verts_warped - verts_standard
             signed_displacements = np.einsum('ij,ij->i', displacement_vectors, normals_standard)
+            print("Signed displacements:\n", signed_displacements)
             signed_displacements = np.clip(signed_displacements, 0, None)
             
             # assign vertex colours - for visualization
@@ -176,7 +178,7 @@ def create_T_matrix(matrix_name, labels, filenames):
             filenames.append(filename)
 
         except Exception as e:
-            print(f"Could not load {filepath}: {e}")
+            print(f"Could not load/save {filepath}: {e}")
 
     if matrix is not None:
         os.makedirs("./saved_data/", exist_ok=True)
@@ -186,6 +188,51 @@ def create_T_matrix(matrix_name, labels, filenames):
         with open("./saved_data/filenames.npy", "wb") as f:
             pickle.dump(filenames, f)
     return matrix
+
+'''
+def normalize_torus_thickness(verts, target_thickness=0.1):
+    ''''''
+    Adjusts the Y-position of each vertex to enforce a consistent torus thickness
+    without altering the overall vertex count or mesh topology.
+    ''''''
+    center = np.mean(verts, axis=0)
+    centered_verts = verts - center
+
+    # Main ring radius (mean radius in XZ)
+    vertex_xz = centered_verts[:, [0, 2]]
+    ring_radius = np.mean(np.linalg.norm(vertex_xz, axis=1))
+
+    # Closest point on ring circle
+    norms = np.linalg.norm(vertex_xz, axis=1, keepdims=True)
+    closest_ring_point = (vertex_xz / np.maximum(norms, 1e-8)) * ring_radius
+
+    # Tube vectors (radial displacement from ring)
+    tube_vectors = vertex_xz - closest_ring_point
+    tube_radii = np.linalg.norm(tube_vectors, axis=1)
+
+    current_tube_radius = np.mean(tube_radii)
+    target_tube_radius = target_thickness / 2
+
+    if current_tube_radius == 0:
+        return verts
+
+    scale = target_tube_radius / current_tube_radius
+    scaled_tube_vectors = tube_vectors * scale / np.maximum(tube_radii[:, None], 1e-8)
+
+    # Scale Y coordinates
+    y_coords = centered_verts[:, 1]
+    y_center = (y_coords.max() + y_coords.min()) / 2
+    y_scale = target_thickness / (y_coords.max() - y_coords.min())
+    scaled_y = (y_coords - y_center) * y_scale + y_center
+
+    # Compose normalized verts
+    normalized_verts = np.empty_like(centered_verts)
+    normalized_verts[:, [0, 2]] = closest_ring_point + scaled_tube_vectors
+    normalized_verts[:, 1] = scaled_y
+
+    return normalized_verts + center
+'''
+
 
 def colour_mesh_vertices(mesh, displacements):
     '''
