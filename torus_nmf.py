@@ -39,18 +39,22 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  May 30, 2025
+Last Modified:  Jun 06, 2025
 '''
 import numpy as np
 from sklearn.preprocessing import normalize
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, accuracy_score, f1_score, confusion_matrix, roc_auc_score
 from sklearn.decomposition import NMF, PCA
+from scipy.optimize import linear_sum_assignment
 import os
 import torus_gen
 import trimesh
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.colors import Normalize
 import pyvista as pv
-import os
+from collections import defaultdict
+import pickle
 
 def main ():
     '''
@@ -63,12 +67,17 @@ def main ():
         - TODO: clusters matrices based on encoded W matrix
     '''
     # load data - check if files exist and load accordingly
-    T_file = "./T.npy"
-    torus_filenames = []
+    T_file = "./saved_data/T.npy"
+    torus_labels = defaultdict(int)
+    filenames = list()
     if (os.path.isfile(T_file)):
         T = np.load(T_file, allow_pickle=True)
+        with open("./saved_data/filenames.npy", "rb") as f:
+            filenames = pickle.load(f)
+        with open("./saved_data/labels.npy", "rb") as f:
+            torus_labels = pickle.load(f)
     else:
-        T = create_T_matrix(T_file, torus_filenames)
+        T = create_T_matrix(T_file, torus_labels, filenames)
     
     #T = normalize(T, axis=1, norm="l1")
     print(f"T Matrix loaded:\n{T}\nShape: {T.shape}")
@@ -101,11 +110,14 @@ def main ():
     #visualize_torus_results(W, H)
     print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, MeanL {np.mean(T)}")
     #visualize_reconstruction_error(T, V)
+    visualize_nmf_torus(W, H)
+    evaluate_nmf_labels(T, W, H, torus_labels, filenames)
+
     
         
         
     
-def create_T_matrix(matrix_name, filenames):
+def create_T_matrix(matrix_name, labels, filenames):
     ''' 
     Creates T matrix using signed displacement values (relative to the first torus in the dataset).
     Saves matrix as .npy file for later use and returns it.
@@ -136,7 +148,8 @@ def create_T_matrix(matrix_name, filenames):
     
     # iterate through torus files, append to matrix
     for file in ply_files[1:]:
-        filepath = os.path.join(torus_dir_str, os.fsdecode(file))
+        filename = os.fsdecode(file)
+        filepath = os.path.join(torus_dir_str, filename)
         print(f"Reading file: {filepath}")
         try:
             mesh = trimesh.load_mesh(filepath)
@@ -146,81 +159,138 @@ def create_T_matrix(matrix_name, filenames):
             displacement_vectors = verts_warped - verts_standard
             signed_displacements = np.einsum('ij,ij->i', displacement_vectors, normals_standard)
             signed_displacements = np.clip(signed_displacements, 0, None)
+            
+            # assign vertex colours - for visualization
+            mesh = colour_mesh_vertices(mesh, signed_displacements)
+            mesh.export(filepath)
         
             # assign to matrix
             if matrix is None:
                 matrix = signed_displacements.reshape(1, -1)  # reshape to 2D array
             else:
                 matrix = np.vstack((matrix, signed_displacements))
-            filenames.append(os.fsdecode(file)) # log for later clustering
+
+            # log filename->label map in dictionary for later label comparison
+            label = int(filename.split('_')[-1][0]) # isolate group value from filename
+            labels[filename] = label
+            filenames.append(filename)
 
         except Exception as e:
             print(f"Could not load {filepath}: {e}")
 
     if matrix is not None:
+        os.makedirs("./saved_data/", exist_ok=True)
         np.save(matrix_name, matrix)
+        with open("./saved_data/labels.npy", "wb") as f:
+            pickle.dump(labels, f)
+        with open("./saved_data/filenames.npy", "wb") as f:
+            pickle.dump(filenames, f)
     return matrix
 
-def visualize_torus_results(W, H, sample_index=0):
+def colour_mesh_vertices(mesh, displacements):
     '''
-    Determines 2D and 3D heatmap visualizations for display and saves for future reference
+    Assigns displacement colours to each mesh vertex - saves result to filepath
     '''
-    torus_dir = os.path.expanduser("./torus_data/")
-    ref_path = os.path.join(torus_dir, "torus_000.ply")
+    norm = Normalize(vmin=displacements.min(), vmax=displacements.max())
+    colourmap = cm.get_cmap('plasma') 
+    colours = (colourmap(norm(displacements))[:, :3] * 255).astype(np.uint8)  # drop alpha
+    mesh.visual.vertex_colors = colours
+    return mesh
 
+
+def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
+    '''
+    Creates more torus data based on factorization - displacement patterns of 
+    each bump location in own mesh is produced, as well as a torus showing
+    all displacement patterns determined
+    '''
+    os.makedirs(out_path, exist_ok=True)
+    ref_mesh = trimesh.load_mesh(ref_path)
+    ref_verts = ref_mesh.vertices
+    ref_normals = ref_mesh.vertex_normals
+    faces = ref_mesh.faces
+    num_components, n_vertices = H.shape
+    assert len(ref_verts) == n_vertices, "Mesh vertex and H features MISMATCH"
+    
+    # Create torus for each NMF result
+    for i in range(num_components):
+        displacements = H[i, :] 
+        bump_verts = ref_verts + (ref_normals * displacements[:, np.newaxis])
+        bump_mesh = trimesh.Trimesh(vertices=bump_verts, faces=faces)
+        bump_mesh = colour_mesh_vertices(bump_mesh, displacements) 
+        bump_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
+
+    # Generate combined torus (heatmap mean of all components)
+    combined_displacements = np.mean(H, axis=0)
+    bump_verts = ref_verts + (ref_normals * displacements[:, np.newaxis])
+    bump_mesh = trimesh.Trimesh(vertices=bump_verts, faces=faces)
+    bump_mesh = colour_mesh_vertices(bump_mesh, combined_displacements) 
+    bump_mesh.export(os.path.join(out_path, "nmf__combined.ply"))
+
+
+
+def evaluate_nmf_labels(T, W, H, labels, filenames):
+    '''
+    Compare ground truth labels derived from filenames against NMF-inferred labels
+    '''
+    # obtain ground truth & predicted labels
     try:
-        mesh = pv.read(ref_path)
-    except Exception as e:
-        print(f"Failed to load reference torus: {e}")
+        ground_truth = [int(labels[fn]) for fn in filenames]
+    except KeyError as e:
+        print(f"Error: Filename {e} not found!")
         return
+    predicted_labels = np.argmax(W, axis=1)
+    
+    # Confusion matrix (unpermuted) to determine best label alignment
+    raw_cm = confusion_matrix(ground_truth, predicted_labels)
+    print("\nConfusion Matrix before label adjustments: ")
+    print(raw_cm)
+    print("Use Hungarian algorithm to correct labels")
 
-    verts = mesh.points
-    x, y, z = verts[:, 0], verts[:, 1], verts[:, 2]
+    # Use Hungarian algorithm to find best label permutation
+    cost_matrix = -raw_cm  # maximize correct predictions
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-    # Compute torus angles for 2D projection
-    theta = (np.arctan2(y, x) + 2*np.pi) % (2*np.pi)
-    phi = (np.arctan2(np.sqrt(x**2 + y**2) - 1.0, z) + 2*np.pi) % (2*np.pi)
+    # Build mapping from predicted -> actual labels
+    label_mapping = {pred_label: true_label for pred_label, true_label in zip(col_ind, row_ind)}
 
-    num_vertices = verts.shape[0]
-    num_subtypes = W.shape[1]
+    # Apply remapping
+    predicted_labels = [label_mapping[label] for label in predicted_labels]
+    
+    # one-hot encode labels (for AUC)
+    k = H.shape[0]
+    onehot_gt = np.zeros((len(ground_truth), k))
+    for i, label in enumerate(ground_truth):
+        onehot_gt[i][label] = 1
 
-    for subtype_idx in range(num_subtypes):
-        basis_vector = H[subtype_idx, :]
-        if basis_vector.shape[0] != num_vertices:
-            print(f"Skipping subtype {subtype_idx} due to shape mismatch.")
-            continue
+    # metrics - reconstruction error, accuracy, f1, ROC AUC, confusion matrix
+    # reconstruction error
+    V = np.matmul(W, H)
+    frobenius_err = np.linalg.norm(T-V, "fro") / np.linalg.norm(T, "fro")
+    
+    # accuracy & f1
+    acc = accuracy_score(ground_truth, predicted_labels)
+    f1 = f1_score(ground_truth, predicted_labels, average="macro")
+    
+    # ROC AUC - set to None if not valid
+    try:
+        auc = roc_auc_score(onehot_gt, W, multi_class='ovo')
+    except ValueError:
+        auc = None  # Not enough variation
 
-        contribution = W[sample_index, subtype_idx] * basis_vector
-        mesh.point_data.clear()
-        mesh.point_data["subtype_contrib"] = contribution
+    # confusion matrix 
+    c_matrix = confusion_matrix(ground_truth, predicted_labels)
 
-        # normalize to 0–255 for RGB colouring
-        contrib_norm = 255 * (contribution - contribution.min()) / (contribution.ptp() + 1e-8)
-        contrib_rgb = plt.cm.viridis(contrib_norm / 255.0)[:, :3]  # Drop alpha
-        mesh.point_data['RGB'] = (contrib_rgb * 255).astype(np.uint8)
-
-        # ---- Save colored 3D mesh ----
-        ply_path = f"torus_colored_subtype_{subtype_idx}_sample_{sample_index}.ply"
-        mesh.save(ply_path)
-        print(f"Saved colored mesh: {ply_path}")
-
-        # ---- Save static 3D view ----
-        plotter = pv.Plotter(off_screen=True)
-        plotter.add_mesh(mesh, scalars="subtype_contrib", cmap="viridis", show_edges=False)
-        plotter.view_isometric()
-        plotter.add_scalar_bar(f"Subtype {subtype_idx}")
-        plotter.screenshot(f"torus_3D_subtype_{subtype_idx}_sample_{sample_index}.png")
-        plotter.close()
-
-        # ---- Save 2D projection ----
-        plt.figure(figsize=(8, 6))
-        sc = plt.scatter(theta, phi, c=contribution, cmap='viridis', s=1)
-        plt.colorbar(sc, label="Subtype contribution")
-        plt.title(f"2D Projection - Subtype {subtype_idx}")
-        plt.xlabel("Theta (tube angle)")
-        plt.ylabel("Phi (donut angle)")
-        plt.savefig(f"torus_2D_subtype_{subtype_idx}_sample_{sample_index}.png", dpi=300)
-        plt.close() 
+    print("\n--- NMF Evaluation Summary ---")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"F1 Score (macro): {f1:.4f}")
+    if auc is not None:
+        print(f"AUC (OVO): {auc:.4f}")
+    else:
+        print("AUC: Not computable (check label variety or sample size).")
+    print(f"Relative Reconstruction Error (Frobenius norm): {frobenius_err:.4f}")
+    print("Confusion Matrix:")
+    print(c_matrix)
 
 if __name__ == "__main__": 
     main()
