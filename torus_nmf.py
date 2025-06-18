@@ -44,7 +44,7 @@ Last Modified:  Jun 13, 2025
 import numpy as np
 from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error, accuracy_score, f1_score, confusion_matrix, roc_auc_score
-from sklearn.decomposition import NMF, PCA
+#from sklearn.decomposition import NMF, PCA
 from scipy.optimize import linear_sum_assignment
 import os
 import torus_gen
@@ -55,6 +55,8 @@ from matplotlib.colors import Normalize
 import pyvista as pv
 from collections import defaultdict
 import pickle
+
+from opnmf.model import OPNMF
 
 def main ():
     '''
@@ -79,12 +81,12 @@ def main ():
     else:
         T = create_T_matrix(T_file, torus_labels, filenames)
     
-    #T = normalize(T, axis=1, norm="l1")
     print(f"T Matrix loaded:\n{T}\nShape: {T.shape}")
     # optimal matrix rank for encoding matrix W
     # TODO: algorithm for determining optimal rank?
     optimal_r = 3
-
+    
+    '''
     # run NMF algorithm - initialize with Nonnegative Double Singular Value
     # Decomposition (nndsvd) for better result convergence than random
     # TODO: test different initialization methods?
@@ -92,24 +94,33 @@ def main ():
     W = model.fit_transform(T)
     H = model.components_
     V = np.matmul(W, H)
+    '''
+    # run OPNMF algorithm
+    # col_mins = T.min(axis=0) # TODO: determine if needed
+    # T = T - col_mins # TODO: determine if needed
+    model = OPNMF(n_components=optimal_r, init='nndsvd', max_iter=1000)
+    W = model.fit_transform(T)
+    H = model.components_
+    # H = H + col_mins # TODO: determine if needed
+    V = np.matmul(W, H)
     
     print(f"W Matrix computed:\n{W}\nShape: {W.shape}")
     print(f"H Matrix computed:\n{H}\nShape: {H.shape}")
     print(f"V Matrix computed:\n{V}\nShape: {V.shape}")
     subtype_labels = W.argmax(axis=1) 
+    
+    '''
     pca = PCA(n_components=2)
     coords = pca.fit_transform(W)
-
     plt.scatter(coords[:, 0], coords[:, 1], c=subtype_labels, cmap='Set1')
     plt.title('Torus Subtyping via NMF')
     plt.xlabel('PC1')
     plt.ylabel('PC2')
     plt.colorbar(label='Subtype')
-    #plt.show()
+    plt.show()
+    '''
     
-    #visualize_torus_results(W, H)
     print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, MeanL {np.mean(T)}")
-    #visualize_reconstruction_error(T, V)
     visualize_nmf_torus(W, H)
     evaluate_nmf_labels(T, W, H, torus_labels, filenames)
 
@@ -159,7 +170,7 @@ def create_T_matrix(matrix_name, labels, filenames):
             # determines signed displacements - uses only positive values
             displacement_vectors = verts_warped - verts_standard
             signed_displacements = np.einsum('ij,ij->i', displacement_vectors, normals_standard)
-            print("Signed displacements:\n", signed_displacements)
+            #print("Signed displacements:\n", signed_displacements)
             signed_displacements = np.clip(signed_displacements, 0, None)
             
             # assign vertex colours - for visualization
