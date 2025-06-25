@@ -44,7 +44,7 @@ Last Modified:  Jun 13, 2025
 import numpy as np
 from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error, accuracy_score, f1_score, confusion_matrix, roc_auc_score
-#from sklearn.decomposition import NMF, PCA
+from sklearn.decomposition import NMF, PCA
 from scipy.optimize import linear_sum_assignment
 import os
 import torus_gen
@@ -85,40 +85,15 @@ def main ():
     # optimal matrix rank for encoding matrix W
     # TODO: algorithm for determining optimal rank?
     optimal_r = 3
-    
-    '''
-    # run NMF algorithm - initialize with Nonnegative Double Singular Value
-    # Decomposition (nndsvd) for better result convergence than random
-    # TODO: test different initialization methods?
-    model = NMF(n_components=optimal_r, init='nndsvd', random_state=0)
-    W = model.fit_transform(T)
-    H = model.components_
-    V = np.matmul(W, H)
-    '''
-    # run OPNMF algorithm
-    # col_mins = T.min(axis=0) # TODO: determine if needed
-    # T = T - col_mins # TODO: determine if needed
-    model = OPNMF(n_components=optimal_r, init='nndsvd', max_iter=1000)
-    W = model.fit_transform(T)
-    H = model.components_
-    # H = H + col_mins # TODO: determine if needed
-    V = np.matmul(W, H)
+ 
+    # run nmf algorithm with selected mode
+    nmf_mode = "opnmf"
+    W, H, V = run_nmf(T, optimal_r, mode=nmf_mode)
     
     print(f"W Matrix computed:\n{W}\nShape: {W.shape}")
     print(f"H Matrix computed:\n{H}\nShape: {H.shape}")
     print(f"V Matrix computed:\n{V}\nShape: {V.shape}")
     subtype_labels = W.argmax(axis=1) 
-    
-    '''
-    pca = PCA(n_components=2)
-    coords = pca.fit_transform(W)
-    plt.scatter(coords[:, 0], coords[:, 1], c=subtype_labels, cmap='Set1')
-    plt.title('Torus Subtyping via NMF')
-    plt.xlabel('PC1')
-    plt.ylabel('PC2')
-    plt.colorbar(label='Subtype')
-    plt.show()
-    '''
     
     print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, MeanL {np.mean(T)}")
     visualize_nmf_torus(W, H)
@@ -200,50 +175,6 @@ def create_T_matrix(matrix_name, labels, filenames):
             pickle.dump(filenames, f)
     return matrix
 
-'''
-def normalize_torus_thickness(verts, target_thickness=0.1):
-    ''''''
-    Adjusts the Y-position of each vertex to enforce a consistent torus thickness
-    without altering the overall vertex count or mesh topology.
-    ''''''
-    center = np.mean(verts, axis=0)
-    centered_verts = verts - center
-
-    # Main ring radius (mean radius in XZ)
-    vertex_xz = centered_verts[:, [0, 2]]
-    ring_radius = np.mean(np.linalg.norm(vertex_xz, axis=1))
-
-    # Closest point on ring circle
-    norms = np.linalg.norm(vertex_xz, axis=1, keepdims=True)
-    closest_ring_point = (vertex_xz / np.maximum(norms, 1e-8)) * ring_radius
-
-    # Tube vectors (radial displacement from ring)
-    tube_vectors = vertex_xz - closest_ring_point
-    tube_radii = np.linalg.norm(tube_vectors, axis=1)
-
-    current_tube_radius = np.mean(tube_radii)
-    target_tube_radius = target_thickness / 2
-
-    if current_tube_radius == 0:
-        return verts
-
-    scale = target_tube_radius / current_tube_radius
-    scaled_tube_vectors = tube_vectors * scale / np.maximum(tube_radii[:, None], 1e-8)
-
-    # Scale Y coordinates
-    y_coords = centered_verts[:, 1]
-    y_center = (y_coords.max() + y_coords.min()) / 2
-    y_scale = target_thickness / (y_coords.max() - y_coords.min())
-    scaled_y = (y_coords - y_center) * y_scale + y_center
-
-    # Compose normalized verts
-    normalized_verts = np.empty_like(centered_verts)
-    normalized_verts[:, [0, 2]] = closest_ring_point + scaled_tube_vectors
-    normalized_verts[:, 1] = scaled_y
-
-    return normalized_verts + center
-'''
-
 
 def colour_mesh_vertices(mesh, displacements):
     '''
@@ -257,86 +188,129 @@ def colour_mesh_vertices(mesh, displacements):
 
 
 def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
-    '''
-    Creates more torus data based on factorization - displacement patterns of 
-    each bump location in own mesh is produced, as well as a torus showing
-    all displacement patterns determined
+    ''' 
+    Visualizes NMF component heatmaps on the reference torus mesh without
+    altering the geometry. Exports colored meshes for each component and
+    an averaged heatmap across components.
     '''
     os.makedirs(out_path, exist_ok=True)
+    
     ref_mesh = trimesh.load_mesh(ref_path)
     ref_verts = ref_mesh.vertices
     ref_normals = ref_mesh.vertex_normals
     faces = ref_mesh.faces
     num_components, n_vertices = H.shape
+
     assert len(ref_verts) == n_vertices, "Mesh vertex and H features MISMATCH"
     
-    # Create torus for each NMF result
     for i in range(num_components):
-        displacements = H[i, :] 
-        bump_verts = ref_verts + (ref_normals * displacements[:, np.newaxis])
-        bump_mesh = trimesh.Trimesh(vertices=bump_verts, faces=faces)
-        bump_mesh = colour_mesh_vertices(bump_mesh, displacements) 
-        bump_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
+        displacements = H[i, :]  # shape: (n_vertices,)
+        
+        heatmap_mesh = ref_mesh.copy()
+        heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements)
+        heatmap_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
 
-    # Generate combined torus (heatmap mean of all components)
-    # TODO: fix to display all 3, not just the mean
-    combined_displacements = np.mean(H, axis=0)
-    bump_verts = ref_verts + (ref_normals * displacements[:, np.newaxis])
-    bump_mesh = trimesh.Trimesh(vertices=bump_verts, faces=faces)
-    bump_mesh = colour_mesh_vertices(bump_mesh, combined_displacements) 
-    bump_mesh.export(os.path.join(out_path, "nmf__combined.ply"))
+    # Combined component heatmap
+    combined_displacements = np.max(H, axis=0)
+    combined_mesh = ref_mesh.copy()
+    combined_mesh = colour_mesh_vertices(combined_mesh, combined_displacements)
+    combined_mesh.export(os.path.join(out_path, "nmf_combined.ply"))
 
-
-
-def evaluate_nmf_labels(T, W, H, labels, filenames):
+def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=1000):
     '''
+    Computes NMF or OPNMF based on selected mode.
+    Returns W, H, and reconstructed matrix V.
+    '''
+    if mode == "nmf":
+        model = NMF(n_components=rank, init=init, max_iter=max_iter, random_state=0)
+    elif mode == "opnmf":
+        model = OPNMF(n_components=rank, init=init, max_iter=max_iter)
+    else:
+        raise ValueError(f"Unsupported mode: {mode}. Use 'nmf' or 'opnmf'.")
+
+    W = model.fit_transform(T)
+    H = model.components_
+    V = np.dot(W, H)
+    return W, H, V
+
+def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, vertex_positions=None):
+    ''' 
     Compare ground truth labels derived from filenames against NMF-inferred labels
-
-    NMF labels may be in a different order to those of input ground truth -
-    manual visual inspection of component tori is required
+    Also evaluate reconstruction error, classification, spatial agreement, and component angular distance
     '''
-    # obtain ground truth & predicted labels
     try:
         ground_truth = [int(labels[fn]) for fn in filenames]
     except KeyError as e:
         print(f"Error: Filename {e} not found!")
         return
+
     initial_labels = np.argmax(W, axis=1)
-        
-    # reorder predicted labels - map initial labels to actual labels
-    print("=== Mapping Predicted Labels ===\nPlease visually inspect the component tori" \
-          " and map their original labels to their current position as determined" \
+
+    # reorder predicted labels manually
+    print("=== Mapping Predicted Labels ===\nPlease visually inspect the component tori" 
+          " and map their original labels to their current position as determined" 
           " by the NMF:")
     component_to_label = defaultdict(int)
     k = H.shape[0]
     for i in range(k):
         component_to_label[i] = int(input(f"{i} -> "))
-    
-    predicted_labels = [component_to_label[initial] for initial in initial_labels] 
-    
+
+    predicted_labels = [component_to_label[initial] for initial in initial_labels]
+
     # one-hot encode labels (for AUC)
     onehot_gt = np.zeros((len(ground_truth), k))
     for i, label in enumerate(ground_truth):
         onehot_gt[i][label] = 1
 
-    # metrics - reconstruction error, accuracy, f1, ROC AUC, confusion matrix
-    # reconstruction error
+    # Reconstruction error
     V = np.matmul(W, H)
-    frobenius_err = np.linalg.norm(T-V, "fro") / np.linalg.norm(T, "fro")
-    
-    # accuracy & f1
+    frobenius_err = np.linalg.norm(T - V, "fro") / np.linalg.norm(T, "fro")
+    mse_err = np.mean((T - V) ** 2)
+
+    # Classification
     acc = accuracy_score(ground_truth, predicted_labels)
     f1 = f1_score(ground_truth, predicted_labels, average="macro")
-    
-    # ROC AUC - set to None if not valid
     try:
         auc = roc_auc_score(onehot_gt, W, multi_class='ovo')
     except ValueError:
-        auc = None  # Not enough variation
+        auc = None
 
-    # confusion matrix 
+    # Confusion matrix
     c_matrix = confusion_matrix(ground_truth, predicted_labels)
 
+    # Surface group correlation
+    if ground_truth_masks is not None:
+        corrs = [pearsonr(H[i], ground_truth_masks[i])[0] for i in range(k)]
+        dice_scores = []
+        for i in range(k):
+            pred_binary = (H[i] > 0.1).astype(int)
+            true_binary = ground_truth_masks[i].astype(int)
+            intersection = np.sum(pred_binary * true_binary)
+            union = np.sum(pred_binary) + np.sum(true_binary)
+            dice = 2 * intersection / (union + 1e-8)
+            dice_scores.append(dice)
+    else:
+        corrs = None
+        dice_scores = None
+
+    # Centroid angle distances
+    if vertex_positions is not None:
+        centroids = []
+        for i in range(k):
+            weights = H[i]
+            centroid = np.average(vertex_positions, axis=0, weights=weights)
+            centroids.append(centroid / np.linalg.norm(centroid))
+
+        angles = []
+        for i in range(len(centroids)):
+            for j in range(i + 1, len(centroids)):
+                dot_product = np.clip(np.dot(centroids[i], centroids[j]), -1.0, 1.0)
+                angle = np.degrees(np.arccos(dot_product))
+                angles.append(angle)
+    else:
+        angles = None
+
+    # Output
     print("\n--- NMF Evaluation Summary ---")
     print(f"Accuracy: {acc:.4f}")
     print(f"F1 Score (macro): {f1:.4f}")
@@ -344,9 +318,18 @@ def evaluate_nmf_labels(T, W, H, labels, filenames):
         print(f"AUC (OVO): {auc:.4f}")
     else:
         print("AUC: Not computable (check label variety or sample size).")
-    print(f"Relative Reconstruction Error (Frobenius norm): {frobenius_err:.4f}")
+    print(f"Reconstruction Error (Frobenius norm): {frobenius_err:.4f}")
+    print(f"Mean Squared Error: {mse_err:.4f}")
     print("Confusion Matrix:")
     print(c_matrix)
+
+    if corrs is not None:
+        print(f"Component-to-Mask Correlations: {[f'{v:.2f}' for v in corrs]}")
+    if dice_scores is not None:
+        print(f"Dice Scores: {[f'{v:.2f}' for v in dice_scores]}")
+    if angles is not None:
+        print(f"Centroid Angle Distances (degrees): {[f'{v:.1f}' for v in angles]}")
+
 
 if __name__ == "__main__": 
     main()
