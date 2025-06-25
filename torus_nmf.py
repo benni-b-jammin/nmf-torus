@@ -39,14 +39,16 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  Jun 13, 2025
+Last Modified:  Jun 25, 2025
 '''
 import numpy as np
 from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error, accuracy_score, f1_score, confusion_matrix, roc_auc_score
 from sklearn.decomposition import NMF, PCA
 from scipy.optimize import linear_sum_assignment
+from scipy.stats import pearsonr
 import os
+import csv
 import torus_gen
 import trimesh
 import matplotlib.pyplot as plt
@@ -55,10 +57,10 @@ from matplotlib.colors import Normalize
 import pyvista as pv
 from collections import defaultdict
 import pickle
-
+from datetime import datetime
 from opnmf.model import OPNMF
 
-def main ():
+def compute_torus_nmf (nmf_mode='opnmf', optimal_r=None):
     '''
     Program functionality executed here:
         - reads files and/or generates torus data
@@ -66,7 +68,6 @@ def main ():
         - TODO: computes rank k for decomposition matrix
         - TODO: initializes W matrix - multiple methods possible
         - computes NMF of matrix - saves W, H, & V
-        - TODO: clusters matrices based on encoded W matrix
     '''
     # load data - check if files exist and load accordingly
     T_file = "./saved_data/T.npy"
@@ -119,7 +120,16 @@ def create_T_matrix(matrix_name, labels, filenames):
         if f.endswith(b'.ply')
     ])
 
-    # Load standard torus for use as reference
+    # Iterate through nmf_ground_truth files to disregard for T matrix
+    gt = True
+    while(gt):
+        ref_filepath = os.path.join(torus_dir_str, os.fsdecode(ply_files[0]))
+        if "groundtruth_" not in ref_filepath:
+            gt = False
+        else:
+            ply_files.pop(0)
+
+    # Standard torus loaded from above action
     ref_filepath = os.path.join(torus_dir_str, os.fsdecode(ply_files[0]))
     print(f"Loading standard torus (reference): {ref_filepath}")
     try:
@@ -233,6 +243,39 @@ def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=1000):
     V = np.dot(W, H)
     return W, H, V
 
+
+def extract_ground_truth_masks(num_components, gt_dir="./torus_data/", ref_file="torus_000.ply", prefix="groundtruth_", threshold=0.01):
+    """
+    Extracts binary masks from ground truth tori by comparing vertex displacements to the reference torus.
+    Returns binary masks for each ground truth component (same shape as H[i]).
+    """
+    masks = []
+
+    # Load reference torus
+    ref_path = os.path.join(gt_dir, ref_file)
+    ref_mesh = trimesh.load_mesh(ref_path)
+    ref_verts = ref_mesh.vertices
+    ref_normals = ref_mesh.vertex_normals
+
+    for i in range(num_components):
+        gt_path = os.path.join(gt_dir, f"{prefix}{i}.ply")
+        if not os.path.isfile(gt_path):
+            raise FileNotFoundError(f"Missing ground truth torus: {gt_path}")
+        
+        gt_mesh = trimesh.load_mesh(gt_path)
+        gt_verts = gt_mesh.vertices
+
+        # Compute signed displacements
+        displacement_vectors = gt_verts - ref_verts
+        signed_displacements = np.einsum('ij,ij->i', displacement_vectors, ref_normals)
+
+        # Threshold to produce binary mask
+        mask = (signed_displacements > threshold).astype(int)
+        masks.append(mask)
+
+    return masks
+
+
 def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, vertex_positions=None):
     ''' 
     Compare ground truth labels derived from filenames against NMF-inferred labels
@@ -277,13 +320,28 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
 
     # Confusion matrix
     c_matrix = confusion_matrix(ground_truth, predicted_labels)
+    
+    # Get ground truth masks
+    ground_truth_masks = extract_ground_truth_masks(H.shape[0])
+    
+    # Reorder H for Pearson and Dice scores
+    # Invert the mapping: new_index -> old_index
+    label_to_component = {v: k for k, v in component_to_label.items()}
 
-    # Surface group correlation
+    H_reordered = []
+
+    for i in range(H.shape[0]):
+        original_row = label_to_component[i]  # Which row in H corresponds to label i?
+        H_reordered.append(H[original_row])
+
+    H_reordered = np.array(H_reordered)
+
+    # Surface group correlation - pearson threshold and dice scores
     if ground_truth_masks is not None:
-        corrs = [pearsonr(H[i], ground_truth_masks[i])[0] for i in range(k)]
+        corrs = [pearsonr(H_reordered[i], ground_truth_masks[i])[0] for i in range(k)]
         dice_scores = []
         for i in range(k):
-            pred_binary = (H[i] > 0.1).astype(int)
+            pred_binary = (H_reordered[i] > 0.25).astype(int)
             true_binary = ground_truth_masks[i].astype(int)
             intersection = np.sum(pred_binary * true_binary)
             union = np.sum(pred_binary) + np.sum(true_binary)
@@ -293,6 +351,8 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
         corrs = None
         dice_scores = None
 
+    # TODO: implement centroid angle (if needed)
+    '''
     # Centroid angle distances
     if vertex_positions is not None:
         centroids = []
@@ -309,7 +369,8 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
                 angles.append(angle)
     else:
         angles = None
-
+    '''
+    '''
     # Output
     print("\n--- NMF Evaluation Summary ---")
     print(f"Accuracy: {acc:.4f}")
@@ -324,12 +385,97 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
     print(c_matrix)
 
     if corrs is not None:
-        print(f"Component-to-Mask Correlations: {[f'{v:.2f}' for v in corrs]}")
+        print("Component-to-Mask Correlations:", ' '.join(f"{v:.2f}" for v in corrs))
     if dice_scores is not None:
-        print(f"Dice Scores: {[f'{v:.2f}' for v in dice_scores]}")
+        print("Dice Scores:", ' '.join(f"{v:.2f}" for v in dice_scores))
     if angles is not None:
         print(f"Centroid Angle Distances (degrees): {[f'{v:.1f}' for v in angles]}")
+    '''
+    # save evaluation data for output
+    evaluation_data = {
+        "Accuracy": acc,
+        "F1 Score (macro)": f1,
+        "AUC (OVO)": auc if auc is not None else "N/A",
+        "Reconstruction Error": frobenius_err,
+        "Mean Squared Error": mse_err,
+        "Confusion Matrix": c_matrix.tolist(),
+    }
+
+    if corrs is not None:
+        evaluation_data["Component-to-Mask Correlations"] = corrs
+    if dice_scores is not None:
+        evaluation_data["Dice Scores"] = dice_scores
+    # TODO: implement centroid angle (if needed)
+    # if angles is not None:
+        # evaluation_data["Centroid Angle Distances"] = angles
+
+    output_evaluation_summary(evaluation_data)
+
+
+def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", csv_path="nmf_results_summary.csv"):
+    '''
+    Outputs evaluation data to:
+    - stdout
+    - a timestamped .txt log file
+    - a cumulative .csv file (one row per run)
+
+    Parameters:
+        evaluation_data (dict): keys are metric names, values are floats, lists, or matrices
+    '''
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # --- STDOUT ---
+    print("\n--- NMF Evaluation Summary ---")
+    for key, value in evaluation_data.items():
+        if isinstance(value, list):
+            if isinstance(value[0], list):  # e.g., Confusion Matrix
+                print(f"{key}:")
+                for row in value:
+                    print("  " + ' '.join(f"{v:.0f}" for v in row))
+            else:
+                print(f"{key}: " + ' '.join(f"{v:.2f}" for v in value))
+        elif isinstance(value, float):
+            print(f"{key}: {value:.4f}")
+        else:
+            print(f"{key}: {value}")
+
+    # --- LOG FILE ---
+    with open(log_path, "a") as f:
+        f.write(f"\n--- NMF Evaluation Summary ({timestamp}) ---\n")
+        for key, value in evaluation_data.items():
+            if isinstance(value, list):
+                if isinstance(value[0], list):
+                    f.write(f"{key}:\n")
+                    for row in value:
+                        f.write("  " + ' '.join(f"{v:.0f}" for v in row) + "\n")
+                else:
+                    f.write(f"{key}: " + ' '.join(f"{v:.2f}" for v in value) + "\n")
+            elif isinstance(value, float):
+                f.write(f"{key}: {value:.4f}\n")
+            else:
+                f.write(f"{key}: {value}\n")
+
+    # --- CSV FILE ---
+    csv_row = [timestamp]
+    header = ["Timestamp"]
+    for key, value in evaluation_data.items():
+        header.append(key)
+        if isinstance(value, list):
+            if isinstance(value[0], list):
+                csv_row.append(';'.join(','.join(str(v) for v in row) for row in value))
+            else:
+                csv_row.append(';'.join(f"{v:.4f}" for v in value))
+        else:
+            csv_row.append(f"{value:.4f}" if isinstance(value, float) else str(value))
+
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        if write_header:
+            writer.writerow(header)
+        writer.writerow(csv_row)
 
 
 if __name__ == "__main__": 
-    main()
+    compute_torus_nmf()

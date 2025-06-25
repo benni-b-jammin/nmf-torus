@@ -1,7 +1,9 @@
 # .gitignore excludes all generated torus data files
 *.ply
 *.swp
-*/__pychache__/*
+*/__pycache__/*
 *.pyc
 *.png
 *.npy
+*.txt
+*.csv
