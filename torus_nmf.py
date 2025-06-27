@@ -41,26 +41,40 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
 Authors:        Benji Lawrence
 Last Modified:  Jun 25, 2025
 '''
+
+# Standard library imports
+import csv
+import getopt
+import os
+import pickle
+import sys
+from collections import defaultdict
+from datetime import datetime
+
+# Third-party imports
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.preprocessing import normalize
-from sklearn.metrics import mean_squared_error, accuracy_score, f1_score, confusion_matrix, roc_auc_score
-from sklearn.decomposition import NMF, PCA
+import pyvista as pv
+import trimesh
+from matplotlib.colors import Normalize
 from scipy.optimize import linear_sum_assignment
 from scipy.stats import pearsonr
-import os
-import csv
-import torus_gen
-import trimesh
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.colors import Normalize
-import pyvista as pv
-from collections import defaultdict
-import pickle
-from datetime import datetime
-from opnmf.model import OPNMF
+from sklearn.decomposition import NMF, PCA
+from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
+                             mean_squared_error, roc_auc_score)
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
+from scipy.spatial.distance import dice
 
-def compute_torus_nmf (nmf_mode='opnmf', optimal_r=None):
+# Local application imports
+import torus_gen
+from opnmf.model import OPNMF
+from opnmf.mode_
+
+## MAIN FUNCTIONALITY =========================================================================================================
+
+def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None):
     '''
     Program functionality executed here:
         - reads files and/or generates torus data
@@ -69,18 +83,19 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=None):
         - TODO: initializes W matrix - multiple methods possible
         - computes NMF of matrix - saves W, H, & V
     '''
+
     # load data - check if files exist and load accordingly
     T_file = "./saved_data/T.npy"
     torus_labels = defaultdict(int)
     filenames = list()
-    if (os.path.isfile(T_file)):
+    if (os.path.isfile(T_file) and reset is None):
         T = np.load(T_file, allow_pickle=True)
         with open("./saved_data/filenames.npy", "rb") as f:
             filenames = pickle.load(f)
         with open("./saved_data/labels.npy", "rb") as f:
             torus_labels = pickle.load(f)
     else:
-        T = create_T_matrix(T_file, torus_labels, filenames)
+        T = create_T_matrix(T_file, torus_labels, filenames, reset)
     
     print(f"T Matrix loaded:\n{T}\nShape: {T.shape}")
     # optimal matrix rank for encoding matrix W
@@ -88,8 +103,7 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=None):
     optimal_r = 3
  
     # run nmf algorithm with selected mode
-    nmf_mode = "opnmf"
-    W, H, V = run_nmf(T, optimal_r, mode=nmf_mode)
+    W, H, V = run_nmf(T, optimal_r, mode=nmf_mode, init=init)
     
     print(f"W Matrix computed:\n{W}\nShape: {W.shape}")
     print(f"H Matrix computed:\n{H}\nShape: {H.shape}")
@@ -97,23 +111,47 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=None):
     subtype_labels = W.argmax(axis=1) 
     
     print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, MeanL {np.mean(T)}")
+    
+    # Get ground truth masks
+    ground_truth_masks = extract_ground_truth_masks(H.shape[0], threshold=0.015)
+    # visualize_nmf_torus(W, H, ground_truth_masks)
     visualize_nmf_torus(W, H)
-    evaluate_nmf_labels(T, W, H, torus_labels, filenames)
+    evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
 
+
+def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=1000):
+    '''
+    Computes NMF or OPNMF based on selected mode.
+    Returns W, H, and reconstructed matrix V.
+    '''
+    if mode == "nmf":
+        model = NMF(n_components=rank, init=init, max_iter=max_iter, random_state=0)
+    elif mode == "opnmf":
+        model = OPNMF(n_components=rank, init=init, max_iter=max_iter)
+    else:
+        raise ValueError(f"Unsupported mode: {mode}. Use 'nmf' or 'opnmf'.")
+
+    W = model.fit_transform(T)
+    H = model.components_
+    V = np.dot(W, H)
+    return W, H, V
     
         
-def create_T_matrix(matrix_name, labels, filenames):
+def create_T_matrix(matrix_name, labels, filenames, reset):
     ''' 
-    Creates T matrix using signed displacement values (relative to the first torus in the dataset).
+    Creates T matrix using signed displacement values (relative to the reference torus).
     Saves matrix as .npy file for later use and returns it.
     '''
     # retrieve torus data - generate if does not exist
     torus_dir_str = os.path.expanduser("./torus_data/")
     matrix = None       # initialized - adjusted to np.array on first loop
     torus_dir = os.fsencode(torus_dir_str)
-    if not (os.path.exists(os.path.join(torus_dir_str, "torus_000.ply"))):
-        print("No torus files - generating...")
-        torus_gen.generate_torus()
+    if (not (os.path.exists(os.path.join(torus_dir_str, "torus_000.ply"))) or reset == "hard"):
+        if (reset == "hard"):
+            print("Hard Reset selected - regenerating torus files...")
+        else:
+            print("No torus files - generating...")
+        torus_gen.generate_torus(num=99, variable="both")
     
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -186,18 +224,81 @@ def create_T_matrix(matrix_name, labels, filenames):
     return matrix
 
 
-def colour_mesh_vertices(mesh, displacements):
+# RANK DETERMINATION ==========================================================================================================
+
+
+# HELPERS =====================================================================================================================
+
+def get_args(argv):
+    """
+    Parses command line arguments for mode, rank, init strategy, reset, etc.
+
+    Returns:
+        mode (str): 'nmf', 'opnmf', etc.
+        rank (int or str): if numeric, treated as integer rank; if str, treated as function name.
+        init (str): NMF initialization method.
+        reset (str or None): determine if saved data is cleared "soft" or tori are recreated "hard"
+    """
+    mode = "opnmf"
+    rank = 3
+    init = "nndsvd"
+    reset = None
+
+    try:
+        opts, _ = getopt.getopt(argv, "m:r:i:R:", ["mode=", "rank=", "init=", "Reset="])
+    except getopt.GetoptError:
+        print("Usage: main.py -m <mode> -r <rank or function> -i <init method> -R <Reset mode>")
+        sys.exit(2)
+
+    for opt, arg in opts:
+        if opt in ("-m", "--mode"):
+            if arg.lower() not in ['nmf', 'opnmf']:
+                print(f"Invalid mode '{arg}'. Choose from: nmf, opnmf")
+                sys.exit(2)
+            mode = arg.lower()
+
+        elif opt in ("-r", "--rank"):
+            if arg.isdigit():
+                rank = int(arg)
+            else:
+                rank = arg  # use as function name string
+
+        elif opt in ("-i", "--init"):
+            valid_inits = ['random', 'nndsvd', 'nndsvda', 'nndsvdar', 'custom']
+            if arg.lower() not in valid_inits:
+                print(f"Invalid init '{arg}'. Choose from: {', '.join(valid_inits)}")
+                sys.exit(2)
+            init = arg.lower()
+
+        elif opt in ("-R", "--Reset"):
+            valid_resets = ["soft", "hard"]
+            if arg.lower() not in valid_resets:
+                print(f"Invalid Reset '{arg}'. Choose from {', '.join(valid_resets)}")
+                sys.exit(2)
+            reset = arg.lower()
+    return mode, rank, init, reset
+
+
+def colour_mesh_vertices(mesh, displacements=None, mask=None):
     '''
-    Assigns displacement colours to each mesh vertex - saves result to filepath
+    Assigns displacement colours to each mesh vertex - returns altered mesh
     '''
-    norm = Normalize(vmin=displacements.min(), vmax=displacements.max())
-    colourmap = cm.get_cmap('plasma') 
-    colours = (colourmap(norm(displacements))[:, :3] * 255).astype(np.uint8)  # drop alpha
-    mesh.visual.vertex_colors = colours
+    if displacements is not None:
+        norm = Normalize(vmin=displacements.min(), vmax=displacements.max())
+        colourmap = cm.get_cmap("plasma") 
+        colours = (colourmap(norm(displacements))[:, :3] * 255).astype(np.uint8)  # drop alpha
+        mesh.visual.vertex_colors = colours
+
+    if mask is not None:
+         # Apply green colour to masked regions
+        mask = mask.astype(bool)
+        colours[mask] = np.array([0, 255, 0])  # green
+        mesh.visual.vertex_colors = colours
+
     return mesh
 
 
-def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
+def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
     ''' 
     Visualizes NMF component heatmaps on the reference torus mesh without
     altering the geometry. Exports colored meshes for each component and
@@ -217,7 +318,10 @@ def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path=".
         displacements = H[i, :]  # shape: (n_vertices,)
         
         heatmap_mesh = ref_mesh.copy()
-        heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements)
+        if gt_masks is not None:
+            heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements, gt_masks[i])
+        else:
+            heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements)
         heatmap_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
 
     # Combined component heatmap
@@ -226,23 +330,8 @@ def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path=".
     combined_mesh = colour_mesh_vertices(combined_mesh, combined_displacements)
     combined_mesh.export(os.path.join(out_path, "nmf_combined.ply"))
 
-def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=1000):
-    '''
-    Computes NMF or OPNMF based on selected mode.
-    Returns W, H, and reconstructed matrix V.
-    '''
-    if mode == "nmf":
-        model = NMF(n_components=rank, init=init, max_iter=max_iter, random_state=0)
-    elif mode == "opnmf":
-        model = OPNMF(n_components=rank, init=init, max_iter=max_iter)
-    else:
-        raise ValueError(f"Unsupported mode: {mode}. Use 'nmf' or 'opnmf'.")
 
-    W = model.fit_transform(T)
-    H = model.components_
-    V = np.dot(W, H)
-    return W, H, V
-
+# EVALUATION AND OUTPUT =======================================================================================================
 
 def extract_ground_truth_masks(num_components, gt_dir="./torus_data/", ref_file="torus_000.ply", prefix="groundtruth_", threshold=0.01):
     """
@@ -321,9 +410,6 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
     # Confusion matrix
     c_matrix = confusion_matrix(ground_truth, predicted_labels)
     
-    # Get ground truth masks
-    ground_truth_masks = extract_ground_truth_masks(H.shape[0])
-    
     # Reorder H for Pearson and Dice scores
     # Invert the mapping: new_index -> old_index
     label_to_component = {v: k for k, v in component_to_label.items()}
@@ -336,17 +422,17 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
 
     H_reordered = np.array(H_reordered)
 
+    
+
     # Surface group correlation - pearson threshold and dice scores
     if ground_truth_masks is not None:
         corrs = [pearsonr(H_reordered[i], ground_truth_masks[i])[0] for i in range(k)]
         dice_scores = []
         for i in range(k):
-            pred_binary = (H_reordered[i] > 0.25).astype(int)
+            pred_binary = (H_reordered[i] > 0.1).astype(int)
             true_binary = ground_truth_masks[i].astype(int)
-            intersection = np.sum(pred_binary * true_binary)
-            union = np.sum(pred_binary) + np.sum(true_binary)
-            dice = 2 * intersection / (union + 1e-8)
-            dice_scores.append(dice)
+            dice_score = 1 - dice(pred_binary, true_binary)  # convert from distance to coefficient
+            dice_scores.append(dice_score)
     else:
         corrs = None
         dice_scores = None
@@ -363,33 +449,26 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
 
         angles = []
         for i in range(len(centroids)):
-            for j in range(i + 1, len(centroids)):
+            for j in range(i     # Surface group correlation - pearson threshold and dice scores
+    if ground_truth_masks is not None:
+        corrs = [pearsonr(H_reordered[i], ground_truth_masks[i])[0] for i in range(k)]
+        dice_scores = []
+        for i in range(k):
+            pred_binary = (H_reordered[i] > 0.1).astype(int)
+            true_binary = ground_truth_masks[i].astype(int)
+            intersection = np.sum(pred_binary * true_binary)
+            union = np.sum(pred_binary) + np.sum(true_binary)
+            dice = 2 * intersection / (union + 1e-8)
+            dice_scores.append(dice)
+    else:
+        corrs = None
+        dice_scores = None
++ 1, len(centroids)):
                 dot_product = np.clip(np.dot(centroids[i], centroids[j]), -1.0, 1.0)
                 angle = np.degrees(np.arccos(dot_product))
                 angles.append(angle)
     else:
         angles = None
-    '''
-    '''
-    # Output
-    print("\n--- NMF Evaluation Summary ---")
-    print(f"Accuracy: {acc:.4f}")
-    print(f"F1 Score (macro): {f1:.4f}")
-    if auc is not None:
-        print(f"AUC (OVO): {auc:.4f}")
-    else:
-        print("AUC: Not computable (check label variety or sample size).")
-    print(f"Reconstruction Error (Frobenius norm): {frobenius_err:.4f}")
-    print(f"Mean Squared Error: {mse_err:.4f}")
-    print("Confusion Matrix:")
-    print(c_matrix)
-
-    if corrs is not None:
-        print("Component-to-Mask Correlations:", ' '.join(f"{v:.2f}" for v in corrs))
-    if dice_scores is not None:
-        print("Dice Scores:", ' '.join(f"{v:.2f}" for v in dice_scores))
-    if angles is not None:
-        print(f"Centroid Angle Distances (degrees): {[f'{v:.1f}' for v in angles]}")
     '''
     # save evaluation data for output
     evaluation_data = {
@@ -478,4 +557,5 @@ def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", cs
 
 
 if __name__ == "__main__": 
-    compute_torus_nmf()
+    mode, optimal_r, init, reset = get_args(sys.argv[1:])
+    compute_torus_nmf(nmf_mode=mode, optimal_r=optimal_r, init=init, reset=reset)

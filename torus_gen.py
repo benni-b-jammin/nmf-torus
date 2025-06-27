@@ -9,7 +9,7 @@ torus_gen.py  - simple script to generate torus data with variations in torus
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence, Khoi Nguyen Xuan
-Last Modified:  Jun 25, 2025
+Last Modified:  Jun 26, 2025
 '''
 # necessary packages for implementation - Khoi
 import os, sys 
@@ -24,6 +24,7 @@ from IPython.display import display  #For display
 from einops import rearrange # Elegant tensor reordering
 import trimesh
 import random
+import pickle
 
 ### Utilities -----------------------------------------------------------------
 # Dot product on the first dimension of n-dimensional arrays x and y
@@ -81,14 +82,14 @@ def deform_vertices(verts, x_warp, resolution):
 
 def generate_ground_truth(label, x, verts, faces, radius):
     angle = (2 * pi / 3) * label
-    bump = compute_bump_field(x, angle, radius, bump_width=0.01, bump_height=20.0)
+    bump = compute_bump_field(x, angle, radius, bump_width=0.01, bump_height=15.0)
     x_warp = -np.stack(np.gradient(bump))
     deformed_verts = deform_vertices(verts.copy(), x_warp, x.shape[-1])
     mesh = trimesh.Trimesh(vertices=deformed_verts, faces=faces, process=False)
     mesh.export(f"./torus_data/groundtruth_{label}.ply")
 
 ## Torus Generation Function --------------------------------------------------
-def generate_torus(num=99):
+def generate_torus(num=99, variable="thickness"):
     '''
     Creates torus data and saves to .ply files
     Torus data is configured to be between 3 regions so the NMF algorithm can 
@@ -98,11 +99,17 @@ def generate_torus(num=99):
     # setup output directory - can be changed if needed
     out_dir = os.path.expanduser("./torus_data/")
     os.makedirs(out_dir, exist_ok=True)
+    metadata = {}
 
-    # some parameters; TODO: add more variability
+    # stable parameters - thickness overridden if variable thickness enabled
     resolution = 100
     radius = 0.25
     seed = 42
+    thickness = 0.1
+
+    # parameters for second bump - utilized if variable second bump enabled
+    second_height = 5
+    second_width = 0.01
 
     #Create an array of 100 points from -1 to 1 
     coords = np.linspace(-1, 1, resolution)
@@ -126,8 +133,7 @@ def generate_torus(num=99):
         noise_scale = random.randint(18, 22)
         noise_strength = random.randint(6, 12)
         bump_width = round(random.uniform(0.005, 0.015), 3)
-        bump_height = round(random.uniform(10.0, 25.0), 1)
-        thickness = round(random.uniform(0.05, 0.15), 2)
+        bump_height = round(random.uniform(5.0, 25.0), 1)
 
         # TODO: randomize bump angle within interval
         angle_centre = (2*np.pi/3) * (i % 3)
@@ -139,8 +145,10 @@ def generate_torus(num=99):
         normals = normals_standard.copy()
 
         # Thickness displacement: move vertices along normals scaled by thickness difference
-        thickness_displacement = (thickness - 0.1)  # relative to base thickness 0.1
-        verts += normals * thickness_displacement
+        if (variable == "thickness") or (variable == "both"):
+            thickness = round(random.uniform(0.05, 0.15), 2)
+            thickness_displacement = (thickness - 0.1)  # relative to base thickness 0.1
+            verts += normals * thickness_displacement
 
         # Noise field
         x_warp = gradient_noise(x, noise_scale, noise_strength, seed)
@@ -150,6 +158,15 @@ def generate_torus(num=99):
         x_dist = np.linalg.norm((x - gaussian_center[:, None, None, None]), axis=0)
         x_bump = bump_height * np.exp(-1. / bump_width * x_dist**2)
         x_warp += -np.stack(np.gradient(x_bump))
+
+        # Extra bump: adds variability to prevent overfitting
+        if (variable == "secondbump") or (variable == "both"):
+            # place at random angle
+            angle = random.uniform(0, 2*np.pi)
+            gaussian_center = np.array([np.sin(angle), 0., np.cos(angle)]) * radius
+            x_dist = np.linalg.norm((x - gaussian_center[:, None, None, None]), axis=0)
+            x_bump = second_height * np.exp(-1. / second_width * x_dist**2) 
+            x_warp += -np.stack(np.gradient(x_bump))
 
         # Interpolate and deform
         x_warp = rearrange(x_warp, 'v h w d -> h w d v')
@@ -163,5 +180,22 @@ def generate_torus(num=99):
         mesh.export(new_mesh_filename)
         print(f"Torus {i+1} generated - saved to {new_mesh_filename}")
 
+        # Log torus metadata
+        metadata[f"torus_{(i+1):03d}_{i%3}"] = {
+            "group": i % 3,
+            "thickness": thickness if (variable in ["thickness", "both"]) else 0.1,
+            "bump_height": bump_height,
+            "bump_width": bump_width,
+            "primary_angle": angle_centre,
+            "confound_angle": angle if (variable in ["secondbump", "both"]) else None
+        }
+    
+    # Save torus metadata
+    with open(os.path.join(out_dir, "torus_metadata.pkl"), "wb") as f:
+        pickle.dump(metadata, f)
+        print("Metadata saved to torus_metadata.pkl")
+
+
+
 if __name__ == "__main__":
-    generate_torus(6)
+    generate_torus(6, variable="both")
