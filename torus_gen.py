@@ -89,7 +89,7 @@ def generate_ground_truth(label, x, verts, faces, radius):
     mesh.export(f"./torus_data/groundtruth_{label}.ply")
 
 ## Torus Generation Function --------------------------------------------------
-def generate_torus(num=99, variable="thickness"):
+def generate_torus(num=99, variable=None):
     '''
     Creates torus data and saves to .ply files
     Torus data is configured to be between 3 regions so the NMF algorithm can 
@@ -191,9 +191,9 @@ def generate_torus(num=99, variable="thickness"):
         }
     
     # Save torus metadata
-    with open(os.path.join(out_dir, "torus_metadata.pkl"), "wb") as f:
+    with open(os.path.join(out_dir, "metadata.pkl"), "wb") as f:
         pickle.dump(metadata, f)
-        print("Metadata saved to torus_metadata.pkl")
+        print("Metadata saved to metadata.pkl")
 
 
 

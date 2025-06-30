@@ -39,7 +39,7 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  Jun 25, 2025
+Last Modified:  Jun 30, 2025
 '''
 
 # Standard library imports
@@ -70,7 +70,7 @@ from scipy.spatial.distance import dice
 # Local application imports
 import torus_gen
 from opnmf.model import OPNMF
-from opnmf.mode_
+from opnmf.selection import rank_permute
 
 ## MAIN FUNCTIONALITY =========================================================================================================
 
@@ -101,6 +101,9 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None)
     # optimal matrix rank for encoding matrix W
     # TODO: algorithm for determining optimal rank?
     optimal_r = 3
+    # optimal_r = select_optimal_k(T, method=nmf_mode, k_min=2, k_max=10, splits=10)
+    # print(f"\nOptimal rank determined as:\t{optimal_r}")
+    # return
  
     # run nmf algorithm with selected mode
     W, H, V = run_nmf(T, optimal_r, mode=nmf_mode, init=init)
@@ -119,7 +122,7 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None)
     evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
 
 
-def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=1000):
+def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=20000):
     '''
     Computes NMF or OPNMF based on selected mode.
     Returns W, H, and reconstructed matrix V.
@@ -151,7 +154,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99, variable="both")
+        torus_gen.generate_torus(num=99) #, variable="both")
     
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -225,6 +228,138 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
 
 
 # RANK DETERMINATION ==========================================================================================================
+
+def select_optimal_k(T, method='opnmf', k_min=2, k_max=10, splits=10, log_path="./results/k_stability_log.txt"):
+    """
+    Determine optimal k using rank_permute and stability analysis
+    Args:
+        T (ndarray): Input data matrix
+        method (str): 'nmf' or 'opnmf'
+        k_min (int): minimum k
+        k_max (int): maximum k
+        splits (int): number of random splits for stability
+        log_path (str): log file path
+    Returns:
+        int: optimal k
+    """
+    '''
+    # Use rank_permute to narrow search
+    print("Running rank_permute to suggest k range...")
+    k_range, _, errors, random_errors, _ = rank_permute(T, k_min, k_max) 
+    p_values = []
+    for true_err, rand_errs in zip(errors, random_errors):
+        rand_errs = np.atleast_1d(rand_errs)
+        p = np.mean(rand_errs <= true_err)
+        p_values.append(p)
+    print("Rank Permutation Results:")
+    for k_val, p in zip(k_range, p_values):
+        print(f"  k={k_val}: p-value={p:.4f}")
+    '''
+
+    # Stability and reconstruction error for each k
+    stability_scores = []
+    reconstruction_errors = []
+    for k in range(k_min, k_max + 1):
+        stability_k, recon_k = run_stability_split(T, k, method, splits)
+        stability_scores.append(stability_k)
+        reconstruction_errors.append(recon_k)
+
+    # Log results
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "a") as f:
+        f.write(f"\n--- k Selection Summary ({timestamp}) ---\n")
+        for k, stab, err in zip(range(k_min, k_max + 1), stability_scores, reconstruction_errors):
+            f.write(f"k={k}: Stability={stab:.4f}, ReconErr={err:.4f}\n")
+
+    # Plot results
+    plot_stability_results(range(k_min, k_max + 1), stability_scores, reconstruction_errors)
+
+    # Return best k (highest stability with acceptable error)
+    optimal_k = np.argmax(stability_scores) + k_min
+    print(f"\nOptimal k selected based on stability: {optimal_k}")
+    return optimal_k
+
+def run_stability_split(T, k, method='opnmf', splits=10):
+    """
+    Compute average stability and reconstruction error over random splits for given k.
+    
+    Parameters:
+        T (np.ndarray): Data matrix (samples x features)
+        k (int): Number of components
+        method (str): 'nmf' or 'opnmf'
+        splits (int): Number of repetitions
+
+    Returns:
+        Tuple[float, float]: (mean_stability, mean_reconstruction_error)
+    """
+    stability_scores = []
+    reconstruction_errors = []
+
+    for _ in range(splits):
+        indices = np.random.permutation(T.shape[0])
+        split_idx = T.shape[0] // 2
+        T_a = T[indices[:split_idx], :]
+        T_b = T[indices[split_idx:], :]
+        
+        noise_strength = 0.05  # tune as needed
+        T_b = T_b + np.random.normal(0, noise_strength, size=T_b.shape)
+        T_b = np.clip(T_b, a_min=0, a_max=None)
+
+
+        # Fit models
+        if method == "opnmf":
+            model_a = OPNMF(n_components=k, init='nndsvd')
+            model_b = OPNMF(n_components=k, init='nndsvd')
+        elif method == "nmf":
+            model_a = NMF(n_components=k, init='nndsvd')
+            model_b = NMF(n_components=k, init='nndsvd')
+
+        W_a = model_a.fit_transform(T_a)
+        W_b = model_b.fit_transform(T_b)
+
+        V_a = np.dot(W_a, model_a.components_)
+        V_b = np.dot(W_b, model_b.components_)
+
+        # Reconstruction error
+        err_a = np.linalg.norm(T_a - V_a, 'fro') / np.linalg.norm(T_a, 'fro')
+        err_b = np.linalg.norm(T_b - V_b, 'fro') / np.linalg.norm(T_b, 'fro')
+        reconstruction_errors.append((err_a + err_b) / 2)
+
+        # Cosine similarity matrices
+        c_Wa = cosine_similarity(W_a.T)
+        c_Wb = cosine_similarity(W_b.T)
+
+        # Row-wise Pearson correlation
+        row_corrs = [pearsonr(c_Wa[i], c_Wb[i])[0] for i in range(c_Wa.shape[0])]
+        stability_scores.append(np.mean(row_corrs))
+
+    return np.mean(stability_scores), np.mean(reconstruction_errors)
+
+
+def plot_stability_results(k_vals, stability, recon_error):
+
+    # Calculate the gradient of reconstruction error
+    recon_gradient = np.gradient(recon_error)
+
+    fig, ax1 = plt.subplots()
+    ax1.set_xlabel('Number of Components (k)')
+    ax1.set_ylabel('Stability Coefficient', color='tab:blue')
+    ax1.plot(k_vals, stability, marker='o', color='tab:blue', label='Stability')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Gradient of Reconstruction Error', color='tab:red')
+    ax2.plot(k_vals, recon_gradient, marker='s', color='tab:red', label='Recon Error Gradient')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+
+    plt.title('Stability vs. Gradient of Reconstruction Error for NMF Component Selection')
+    plt.tight_layout()
+
+    os.makedirs("./results", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    plt.savefig(f"./results/k_selection_plot_{timestamp}.png")
+    plt.show()
 
 
 # HELPERS =====================================================================================================================
