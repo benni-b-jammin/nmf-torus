@@ -78,7 +78,7 @@ from opnmf.selection import rank_permute
 
 NMF_ITER = 50000
 NMF_TOL = 1e-9
-N_METHOD = "global"
+N_METHOD = None
 
 def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None, n_method=N_METHOD):
     '''
@@ -104,8 +104,9 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None,
         T = create_T_matrix(T_file, torus_labels, filenames, reset)
     
     # normalize and clamp T matrix
-    print(f"Applying normalization method: {n_method}")
-    T = normalize_matrix(T, method=n_method)
+    if n_method is not None:
+        print(f"Applying normalization method: {n_method}")
+        T = normalize_matrix(T, method=n_method)
     T = np.clip(T, 0, None) # clamp negative values in matrix
 
     
@@ -784,8 +785,8 @@ def output_evaluation_summary(
                 f.write(f"{key}: {value}\n")
 
     # --- CSV FILE ---
-    csv_row = [timestamp, mode, max_iter, tol, batchID]
-    header = ["Timestamp", "Mode", "Max Iterations", "Tolerance", "Batch ID"]
+    csv_row = [timestamp, mode, max_iter, tol, batchID, variable, n_method]
+    header = ["Timestamp", "Mode", "Max Iterations", "Tolerance", "Batch ID", "Variable", "Normalization"]
     for key, value in evaluation_data.items():
         header.append(key)
         if isinstance(value, list):
@@ -802,6 +803,7 @@ def output_evaluation_summary(
         if write_header:
             writer.writerow(header)
         writer.writerow(csv_row)
+
 
 if __name__ == "__main__": 
     mode, optimal_r, init, reset = get_args(sys.argv[1:])

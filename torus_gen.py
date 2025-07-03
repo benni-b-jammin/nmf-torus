@@ -125,13 +125,17 @@ def generate_torus(num=99, variable=None):
     #Create a 3D grid with coords above 
     x = np.stack(np.meshgrid(coords, coords, coords)) # x.shape = (3, 100, 100, 100)
 
-    # Generate standard Torus for displacement comparison
-    sdf_standard = sdf_torus(x, radius, 0.1)
-    verts_standard, faces_standard, normals_standard, _ = measure.marching_cubes(sdf_standard, level=0)
+    # Generate reference torus for comparison against (slightly smaller to prevent negative values)
+    sdf_ref = sdf_torus(x, radius - 0.02, 0.1)
+    verts_ref, faces_ref, normals_ref,  _ = measure.marching_cubes(sdf_ref, level=0)
 
     # Save as PLY
-    mesh = trimesh.Trimesh(vertices=verts_standard, faces=faces_standard, process=False)
+    mesh = trimesh.Trimesh(vertices=verts_ref, faces=faces_ref, process=False)
     mesh.export(os.path.join(out_dir, f"torus_000.ply"))
+
+    # Generate standard Torus for torus generation
+    sdf_standard = sdf_torus(x, radius, 0.1)
+    verts_standard, faces_standard, normals_standard, _ = measure.marching_cubes(sdf_standard, level=0)
 
     # Generate and save ground truth data - for correlation-based evaluation
     for label in range(3):
