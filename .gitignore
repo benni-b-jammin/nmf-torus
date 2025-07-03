@@ -8,4 +8,5 @@
 *.txt
 *.csv
 *.pkl
+*.pdf
 */.resources/*

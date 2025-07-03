@@ -125,21 +125,19 @@ def generate_torus(num=99, variable=None):
     #Create a 3D grid with coords above 
     x = np.stack(np.meshgrid(coords, coords, coords)) # x.shape = (3, 100, 100, 100)
 
-    # Generate reference torus for comparison against (slightly smaller to prevent negative values)
-    sdf_ref = sdf_torus(x, radius - 0.02, 0.1)
-    verts_ref, faces_ref, normals_ref,  _ = measure.marching_cubes(sdf_ref, level=0)
-
-    # Save as PLY
-    mesh = trimesh.Trimesh(vertices=verts_ref, faces=faces_ref, process=False)
-    mesh.export(os.path.join(out_dir, f"torus_000.ply"))
-
-    # Generate standard Torus for torus generation
+    # Generate standard Torus for displacement comparison
     sdf_standard = sdf_torus(x, radius, 0.1)
     verts_standard, faces_standard, normals_standard, _ = measure.marching_cubes(sdf_standard, level=0)
 
+    # Save refrence as PLY - make smaller to ensure all displacements >= 0
+    shrink_factor = 0.9
+    verts_ref = verts_standard + (normals_standard * shrink_factor)
+    mesh = trimesh.Trimesh(vertices=verts_ref, faces=faces_standard, process=False)
+    mesh.export(os.path.join(out_dir, f"torus_000.ply"))
+
     # Generate and save ground truth data - for correlation-based evaluation
     for label in range(3):
-        generate_ground_truth(label, x, verts_standard, faces_standard, radius)
+        generate_ground_truth(label, x, verts_ref, faces_standard, radius)
 
     for i in range(num):
         # randomize noise, bump_size, thickness
@@ -159,7 +157,7 @@ def generate_torus(num=99, variable=None):
 
         # Thickness displacement: move vertices along normals scaled by thickness difference
         if (variable == "thickness") or (variable == "both"):
-            thickness = round(random.uniform(0.05, 0.15), 2)
+            thickness = round(random.uniform(0.1, 0.2), 2)
             thickness_displacement = (thickness - 0.1)  # relative to base thickness 0.1
             verts += normals * thickness_displacement
 

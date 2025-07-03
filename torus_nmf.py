@@ -78,9 +78,8 @@ from opnmf.selection import rank_permute
 
 NMF_ITER = 50000
 NMF_TOL = 1e-9
-N_METHOD = None
 
-def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None, n_method=N_METHOD):
+def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None, n_method=None):
     '''
     Program functionality executed here:
         - reads files and/or generates torus data
@@ -133,7 +132,7 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None,
     # visualize_nmf_torus(W, H, ground_truth_masks)
     visualize_nmf_torus(W, H)
     eval_data = evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
-    output_evaluation_summary(eval_data, mode=mode, max_iter=NMF_ITER, tol=NMF_TOL, n_method=N_METHOD)
+    output_evaluation_summary(eval_data, mode=mode, max_iter=NMF_ITER, tol=NMF_TOL, n_method=n_method)
 
 
 def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=NMF_ITER, tol=NMF_TOL):
@@ -396,9 +395,10 @@ def get_args(argv):
     rank = 3
     init = "nndsvd"
     reset = None
+    n_method = None
 
     try:
-        opts, _ = getopt.getopt(argv, "m:r:i:R:", ["mode=", "rank=", "init=", "Reset="])
+        opts, _ = getopt.getopt(argv, "m:r:i:R:n:", ["mode=", "rank=", "init=", "Reset=", "normalize="])
     except getopt.GetoptError:
         print("Usage: main.py -m <mode> -r <rank or function> -i <init method> -R <Reset mode>")
         sys.exit(2)
@@ -429,7 +429,14 @@ def get_args(argv):
                 print(f"Invalid Reset '{arg}'. Choose from {', '.join(valid_resets)}")
                 sys.exit(2)
             reset = arg.lower()
-    return mode, rank, init, reset
+
+        elif opt in ("-n", "--normalize"):
+            valid_n = ["global", "per_entry", "pls"]
+            if arg.lower() not in valid_n:
+                print(f"Invalid normalize '{arg}'. Choose from {', '.join(valid_n)}")
+                sys.exit(2)
+            n_method = arg.lower()
+    return mode, rank, init, reset, n_method
 
 
 def colour_mesh_vertices(mesh, displacements=None, mask=None):
@@ -806,5 +813,5 @@ def output_evaluation_summary(
 
 
 if __name__ == "__main__": 
-    mode, optimal_r, init, reset = get_args(sys.argv[1:])
-    compute_torus_nmf(nmf_mode=mode, optimal_r=optimal_r, init=init, reset=reset)
+    mode, optimal_r, init, reset, n_method = get_args(sys.argv[1:])
+    compute_torus_nmf(nmf_mode=mode, optimal_r=optimal_r, init=init, reset=reset, n_method=n_method)
