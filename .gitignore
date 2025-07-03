@@ -7,3 +7,5 @@
 *.npy
 *.txt
 *.csv
+*.pkl
+*/.resources/*
