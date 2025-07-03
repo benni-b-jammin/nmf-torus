@@ -25,6 +25,8 @@ from einops import rearrange # Elegant tensor reordering
 import trimesh
 import random
 import pickle
+import hashlib
+import time
 
 ### Utilities -----------------------------------------------------------------
 # Dot product on the first dimension of n-dimensional arrays x and y
@@ -88,6 +90,10 @@ def generate_ground_truth(label, x, verts, faces, radius):
     mesh = trimesh.Trimesh(vertices=deformed_verts, faces=faces, process=False)
     mesh.export(f"./torus_data/groundtruth_{label}.ply")
 
+def create_batchID():
+    # creates unique batch ID off of current timestamp
+    return hashlib.sha256(str(time.time_ns()).encode('utf-8')).hexdigest()[:16]
+
 ## Torus Generation Function --------------------------------------------------
 def generate_torus(num=99, variable=None):
     '''
@@ -100,6 +106,9 @@ def generate_torus(num=99, variable=None):
     out_dir = os.path.expanduser("./torus_data/")
     os.makedirs(out_dir, exist_ok=True)
     metadata = {}
+    
+    # batchID - for tracking purpose
+    batchID = create_batchID()
 
     # stable parameters - thickness overridden if variable thickness enabled
     resolution = 100
@@ -160,10 +169,10 @@ def generate_torus(num=99, variable=None):
         x_warp += -np.stack(np.gradient(x_bump))
 
         # Extra bump: adds variability to prevent overfitting
-        if (variable == "secondbump") or (variable == "both"):
+        if (variable == "secondangle") or (variable == "both"):
             # place at random angle
-            angle = random.uniform(0, 2*np.pi)
-            gaussian_center = np.array([np.sin(angle), 0., np.cos(angle)]) * radius
+            second_angle = random.uniform(0, 2*np.pi)
+            gaussian_center = np.array([np.sin(second_angle), 0., np.cos(second_angle)]) * radius
             x_dist = np.linalg.norm((x - gaussian_center[:, None, None, None]), axis=0)
             x_bump = second_height * np.exp(-1. / second_width * x_dist**2) 
             x_warp += -np.stack(np.gradient(x_bump))
@@ -186,13 +195,14 @@ def generate_torus(num=99, variable=None):
             "thickness": thickness if (variable in ["thickness", "both"]) else 0.1,
             "bump_height": bump_height,
             "bump_width": bump_width,
-            "primary_angle": angle_centre,
-            "confound_angle": angle if (variable in ["secondbump", "both"]) else None
+            "primary_angle": angle,
+            "secondary_angle": second_angle if (variable in ["secondangle", "both"]) else None
         }
     
-    # Save torus metadata
+    # Save batch ID & torus metadata
+    md = [batchID, variable, metadata]
     with open(os.path.join(out_dir, "metadata.pkl"), "wb") as f:
-        pickle.dump(metadata, f)
+        pickle.dump(md, f)
         print("Metadata saved to metadata.pkl")
 
 

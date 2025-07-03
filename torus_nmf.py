@@ -65,6 +65,8 @@ from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              mean_squared_error, roc_auc_score)
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
+from sklearn.linear_model import LinearRegression
+from sklearn.cross_decomposition import PLSRegression
 from scipy.spatial.distance import dice
 
 # Local application imports
@@ -74,7 +76,11 @@ from opnmf.selection import rank_permute
 
 ## MAIN FUNCTIONALITY =========================================================================================================
 
-def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None):
+NMF_ITER = 50000
+NMF_TOL = 1e-9
+N_METHOD = "global"
+
+def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None, n_method=N_METHOD):
     '''
     Program functionality executed here:
         - reads files and/or generates torus data
@@ -97,6 +103,12 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None)
     else:
         T = create_T_matrix(T_file, torus_labels, filenames, reset)
     
+    # normalize and clamp T matrix
+    print(f"Applying normalization method: {n_method}")
+    T = normalize_matrix(T, method=n_method)
+    T = np.clip(T, 0, None) # clamp negative values in matrix
+
+    
     print(f"T Matrix loaded:\n{T}\nShape: {T.shape}")
     # optimal matrix rank for encoding matrix W
     # TODO: algorithm for determining optimal rank?
@@ -104,7 +116,7 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None)
     # optimal_r = select_optimal_k(T, method=nmf_mode, k_min=2, k_max=10, splits=10)
     # print(f"\nOptimal rank determined as:\t{optimal_r}")
     # return
- 
+
     # run nmf algorithm with selected mode
     W, H, V = run_nmf(T, optimal_r, mode=nmf_mode, init=init)
     
@@ -119,18 +131,19 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None)
     ground_truth_masks = extract_ground_truth_masks(H.shape[0], threshold=0.015)
     # visualize_nmf_torus(W, H, ground_truth_masks)
     visualize_nmf_torus(W, H)
-    evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
+    eval_data = evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
+    output_evaluation_summary(eval_data, mode=mode, max_iter=NMF_ITER, tol=NMF_TOL, n_method=N_METHOD)
 
 
-def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=20000):
+def run_nmf(T, rank, mode="nmf", init="nndsvd", max_iter=NMF_ITER, tol=NMF_TOL):
     '''
     Computes NMF or OPNMF based on selected mode.
     Returns W, H, and reconstructed matrix V.
     '''
     if mode == "nmf":
-        model = NMF(n_components=rank, init=init, max_iter=max_iter, random_state=0)
+        model = NMF(n_components=rank, init=init, max_iter=max_iter, random_state=0, tol=tol)
     elif mode == "opnmf":
-        model = OPNMF(n_components=rank, init=init, max_iter=max_iter)
+        model = OPNMF(n_components=rank, init=init, max_iter=max_iter, tol=tol)
     else:
         raise ValueError(f"Unsupported mode: {mode}. Use 'nmf' or 'opnmf'.")
 
@@ -148,19 +161,27 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
     # retrieve torus data - generate if does not exist
     torus_dir_str = os.path.expanduser("./torus_data/")
     matrix = None       # initialized - adjusted to np.array on first loop
-    torus_dir = os.fsencode(torus_dir_str)
-    if (not (os.path.exists(os.path.join(torus_dir_str, "torus_000.ply"))) or reset == "hard"):
+    md_filepath = os.path.join(torus_dir_str, "metadata.pkl") 
+    
+    if (not (os.path.exists(md_filepath)) or reset == "hard"):
         if (reset == "hard"):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99) #, variable="both")
-    
+        torus_gen.generate_torus(num=99,  variable="both")
+    '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
         if f.endswith(b'.ply')
     ])
-
+    '''
+    # Load metadata
+    with open(md_filepath, "rb") as f:
+        batch_id, variable, metadata = pickle.load(f)
+    
+    # extract filenames from metadata (stored as keys)
+    ply_files = sorted(metadata.keys())
+    '''
     # Iterate through nmf_ground_truth files to disregard for T matrix
     gt = True
     while(gt):
@@ -169,9 +190,10 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             gt = False
         else:
             ply_files.pop(0)
+    '''
 
     # Standard torus loaded from above action
-    ref_filepath = os.path.join(torus_dir_str, os.fsdecode(ply_files[0]))
+    ref_filepath = os.path.join(torus_dir_str, f"torus_000.ply") # os.fsdecode(ply_files[0]))
     print(f"Loading standard torus (reference): {ref_filepath}")
     try:
         ref_mesh = trimesh.load_mesh(ref_filepath)
@@ -182,22 +204,17 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
         return None
     
     # iterate through torus files, append to matrix
-    for file in ply_files[1:]:
-        filename = os.fsdecode(file)
+    for file in ply_files:
+        filename = f"{file}.ply"
         filepath = os.path.join(torus_dir_str, filename)
         print(f"Reading file: {filepath}")
         try:
             mesh = trimesh.load_mesh(filepath)
             verts_warped = mesh.vertices
             
-            # normalize thickness to reduce influence
-            # verts_warped = normalize_torus_thickness(verts_warped)
-
             # determines signed displacements - uses only positive values
             displacement_vectors = verts_warped - verts_standard
             signed_displacements = np.einsum('ij,ij->i', displacement_vectors, normals_standard)
-            #print("Signed displacements:\n", signed_displacements)
-            signed_displacements = np.clip(signed_displacements, 0, None)
             
             # assign vertex colours - for visualization
             mesh = colour_mesh_vertices(mesh, signed_displacements)
@@ -466,6 +483,75 @@ def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.pl
     combined_mesh.export(os.path.join(out_path, "nmf_combined.ply"))
 
 
+# NORMALIZATION ===============================================================================================================
+
+def extract_normalizer_matrix(metadata):
+    """
+    Using metadata, return regressor matrix A from thickness and secondary angle.
+    Returns:
+        A (np.ndarray): (n_samples, 2) matrix [thickness, secondary_angle]
+        keys (list): list of keys corresponding to torus identifiers
+    """
+
+    thicknesses = []
+    angles = []
+    keys = []
+
+    for key, entry in metadata.items():
+        thickness = entry.get("thickness", 0.1)
+        angle = entry.get("secondary_angle")
+        if angle is None:
+            angle = 0.0
+        thicknesses.append(thickness)
+        angles.append(angle)
+        keys.append(key)
+
+    A = np.column_stack((thicknesses, angles))
+    return A, keys
+
+
+def normalize_matrix(T, metadata_path="./torus_data/metadata.pkl", method="global"):
+    """
+    Normalize matrix T using thickness and angle regressors from metadata.
+    
+    Parameters:
+        T (np.ndarray): (n_samples, n_features) data matrix
+        metadata (dict): metadata for all tori
+        method (str): 'global', 'per_entry', or 'pls'
+        
+    Returns:
+        T_norm (np.ndarray): residualized matrix of same shape as T
+    """
+    with open(metadata_path, "rb") as f:
+        _, _, metadata = pickle.load(f)
+
+    A, _ = extract_normalizer_matrix(metadata)
+
+    if method == "global":
+        model = LinearRegression()
+        model.fit(A, T)
+        T_pred = model.predict(A)
+        T_norm = T - T_pred
+
+    elif method == "per_entry":
+        T_norm = np.zeros_like(T)
+        for j in range(T.shape[1]):
+            model = LinearRegression()
+            model.fit(A, T[:, j])
+            T_norm[:, j] = T[:, j] - model.predict(A)
+
+    elif method == "pls":
+        pls = PLSRegression(n_components=1)
+        pls.fit(A, T)
+        T_pred = pls.predict(A)
+        T_norm = T - T_pred
+
+    else:
+        raise ValueError(f"Normalization method '{method}' is not recognized.")
+    
+    return T_norm
+
+
 # EVALUATION AND OUTPUT =======================================================================================================
 
 def extract_ground_truth_masks(num_components, gt_dir="./torus_data/", ref_file="torus_000.ply", prefix="groundtruth_", threshold=0.01):
@@ -622,11 +708,20 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
     # TODO: implement centroid angle (if needed)
     # if angles is not None:
         # evaluation_data["Centroid Angle Distances"] = angles
+    
+    return evaluation_data
 
-    output_evaluation_summary(evaluation_data)
 
 
-def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", csv_path="nmf_results_summary.csv"):
+def output_evaluation_summary(
+    evaluation_data, 
+    log_path="nmf_output_log.txt", 
+    csv_path="nmf_results_summary.csv",
+    metadata_path = "./torus_data/metadata.pkl",
+    mode=None,
+    max_iter=None,
+    tol=None,
+    n_method=None):
     '''
     Outputs evaluation data to:
     - stdout
@@ -638,9 +733,21 @@ def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", cs
     '''
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # load batch ID for torus data
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+    with open(metadata_path, "rb") as f:
+        batchID, variable, _ = pickle.load(f) 
 
     # --- STDOUT ---
     print("\n--- NMF Evaluation Summary ---")
+    print(f"Mode: {mode}")
+    print(f"Max Iterations: {max_iter}")
+    print(f"Tolerance: {tol}")
+    print(f"Batch ID: {batchID}")
+    print(f"Variable: {variable}")
+    print(f"Normalization: {n_method}")
     for key, value in evaluation_data.items():
         if isinstance(value, list):
             if isinstance(value[0], list):  # e.g., Confusion Matrix
@@ -657,6 +764,12 @@ def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", cs
     # --- LOG FILE ---
     with open(log_path, "a") as f:
         f.write(f"\n--- NMF Evaluation Summary ({timestamp}) ---\n")
+        f.write(f"Mode: {mode}\n")
+        f.write(f"Max Iterations: {max_iter}\n")
+        f.write(f"Tolerance: {tol}\n")
+        f.write(f"Batch ID: {batchID}\n")
+        f.write(f"Variable: {variable}\n")
+        f.write(f"Normalization: {n_method}\n")
         for key, value in evaluation_data.items():
             if isinstance(value, list):
                 if isinstance(value[0], list):
@@ -671,8 +784,8 @@ def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", cs
                 f.write(f"{key}: {value}\n")
 
     # --- CSV FILE ---
-    csv_row = [timestamp]
-    header = ["Timestamp"]
+    csv_row = [timestamp, mode, max_iter, tol, batchID]
+    header = ["Timestamp", "Mode", "Max Iterations", "Tolerance", "Batch ID"]
     for key, value in evaluation_data.items():
         header.append(key)
         if isinstance(value, list):
@@ -689,7 +802,6 @@ def output_evaluation_summary(evaluation_data, log_path="nmf_output_log.txt", cs
         if write_header:
             writer.writerow(header)
         writer.writerow(csv_row)
-
 
 if __name__ == "__main__": 
     mode, optimal_r, init, reset = get_args(sys.argv[1:])
