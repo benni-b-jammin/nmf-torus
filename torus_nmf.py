@@ -15,23 +15,27 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                  -> no .ply files: 
                         generate all .ply files using the torus_gen.py script,
                         repeat above
+                 -> hard reset mode enabled:
+                        regenerate all .ply files, as above
                 
                 Using tori data from .npy file (generates if none exist), this 
-                script arranges torus data in a matrix and computes NMF:
+                script loads torus data, computes displacements of each w.r.t. 
+                a reference torus, and arranges displacement data in a matrix 
+                to compute a matrix factorization using traditional NMF or OPNMF:
                     
                         T is approximated by WH = V
 
                     T = original matrix; torus coordinate data represented in
-                        each row via [x1, y1, z1, x2, y2, z2, ..., xm, ym, zm]
-                        dimension n x 3m matrix, n tori, m coordinates in each
+                        each row via [t1, t2, ..., tm]
+                        dimension n x m matrix, n tori, m displacements in each
                     W = encoding matrix for torus data: deduced via NMF to
                         show latent subtype representation of each torus
                         dimension n x k, n tori, k optimal rank of encoding
                     H = component matrix of torus data: latent basis shape of 
                         coordinate data
-                        dimension k x 3m
+                        dimension k x n
                     V = approximation of T matrix from derived W & H
-                        dimension n x 3m, same as T
+                        dimension n x m, same as T
                     
 
                 Note: credit for original torus generation can be given to Khoi
@@ -39,7 +43,7 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  Jun 30, 2025
+Last Modified:  Jul 04, 2025
 '''
 
 # Standard library imports
