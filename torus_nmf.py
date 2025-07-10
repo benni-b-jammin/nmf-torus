@@ -172,7 +172,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99,  variable="both")
+        torus_gen.generate_torus(num=99,  variable="thickness", surface="noise")
     '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -181,7 +181,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
     '''
     # Load metadata
     with open(md_filepath, "rb") as f:
-        batch_id, variable, metadata = pickle.load(f)
+        batch_id, surface, variable, metadata = pickle.load(f)
     
     # extract filenames from metadata (stored as keys)
     ply_files = sorted(metadata.keys())
@@ -497,7 +497,7 @@ def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.pl
 
 # NORMALIZATION ===============================================================================================================
 
-def extract_normalizer_matrix(metadata):
+def extract_normalizer_matrix(metadata, surface):
     """
     Using metadata, return regressor matrix A from thickness and secondary angle.
     Returns:
@@ -535,9 +535,9 @@ def normalize_matrix(T, metadata_path="./torus_data/metadata.pkl", method="globa
         T_norm (np.ndarray): residualized matrix of same shape as T
     """
     with open(metadata_path, "rb") as f:
-        _, _, metadata = pickle.load(f)
+        _, surface, _, metadata = pickle.load(f)
 
-    A, _ = extract_normalizer_matrix(metadata)
+    A, _ = extract_normalizer_matrix(metadata, surface)
 
     if method == "global":
         model = LinearRegression()
@@ -750,7 +750,7 @@ def output_evaluation_summary(
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
     with open(metadata_path, "rb") as f:
-        batchID, variable, _ = pickle.load(f) 
+        batchID, surface, variable, _ = pickle.load(f) 
 
     # --- STDOUT ---
     print("\n--- NMF Evaluation Summary ---")
@@ -758,6 +758,7 @@ def output_evaluation_summary(
     print(f"Max Iterations: {max_iter}")
     print(f"Tolerance: {tol}")
     print(f"Batch ID: {batchID}")
+    print(f"Surface Type: {surface}")
     print(f"Variable: {variable}")
     print(f"Normalization: {n_method}")
     for key, value in evaluation_data.items():
@@ -780,6 +781,7 @@ def output_evaluation_summary(
         f.write(f"Max Iterations: {max_iter}\n")
         f.write(f"Tolerance: {tol}\n")
         f.write(f"Batch ID: {batchID}\n")
+        f.write(f"Surface Type: {surface}\n")
         f.write(f"Variable: {variable}\n")
         f.write(f"Normalization: {n_method}\n")
         for key, value in evaluation_data.items():
@@ -797,7 +799,7 @@ def output_evaluation_summary(
 
     # --- CSV FILE ---
     csv_row = [timestamp, mode, max_iter, tol, batchID, variable, n_method]
-    header = ["Timestamp", "Mode", "Max Iterations", "Tolerance", "Batch ID", "Variable", "Normalization"]
+    header = ["Timestamp", "Mode", "Max Iterations", "Tolerance", "Batch ID", "Surface Type", "Variable", "Normalization"]
     for key, value in evaluation_data.items():
         header.append(key)
         if isinstance(value, list):
