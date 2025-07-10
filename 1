@@ -9,7 +9,7 @@ torus_gen.py  - simple script to generate torus data with variations in torus
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence, Khoi Nguyen Xuan
-Last Modified:  Jun 26, 2025
+Last Modified:  Jul 10, 2025
 '''
 # necessary packages for implementation - Khoi
 import os, sys 
@@ -75,7 +75,7 @@ def compute_bump_field(x, angle, radius, bump_width, bump_height):
     center = np.array([np.sin(angle), 0., np.cos(angle)]) * radius
     dist = np.linalg.norm((x - center[:, None, None, None]), axis=0)
     return bump_height * np.exp(-1. / bump_width * dist**2)
-'''
+
 def compute_correlated_noise(x, radius, theta_min, theta_max, strength=4.0, sigma=1.5, seed=None):
     
     if seed is not None:
@@ -96,8 +96,8 @@ def compute_correlated_noise(x, radius, theta_min, theta_max, strength=4.0, sigm
 
     return noise_field * strength
 '''
-def compute_correlated_noise(x, center_angle, radius, angular_spread=np.pi/12, spatial_spread=0.2, strength=8.0, sigma=1.0, seed=None):
-    '''
+def compute_correlated_noise(x, center_angle, radius, spread=0.1, strength=5.0, sigma=1.0, seed=None):
+    
     Create localized correlated noise centered at a specific angle on the torus surface.
 
     Parameters:
@@ -108,9 +108,10 @@ def compute_correlated_noise(x, center_angle, radius, angular_spread=np.pi/12, s
     - strength: scaling of noise intensity
     - sigma: Gaussian smoothing parameter
     - seed: for reproducibility
-    '''
+    
     if seed is not None:
         np.random.seed(seed)
+
     # Compute 3D Gaussian centered at (sinθ, 0, cosθ) * radius
     center = np.array([np.sin(center_angle), 0., np.cos(center_angle)]) * radius  # shape (3,)
 
@@ -118,28 +119,16 @@ def compute_correlated_noise(x, center_angle, radius, angular_spread=np.pi/12, s
     dist = np.linalg.norm(x - center[:, None, None, None], axis=0)  # shape (res, res, res)
 
     # Gaussian mask around the bump center
-    gaussian_mask = np.exp(-0.5 * (dist / spatial_spread) ** 2)
-    
-    # Angular band mask
-    X, Z = x[0], x[2]
-    theta = np.mod(np.arctan2(Z, X), 2 * np.pi)
-    theta_min = (center_angle - angular_spread) % (2 * np.pi)
-    theta_max = (center_angle + angular_spread) % (2 * np.pi)
-    # print(f"Angle values: theta_min={theta_min}, theta_max={theta_max}")
-    
-    if theta_min < theta_max:
-        angular_mask = (theta >= theta_min) & (theta <= theta_max)
-    else:
-        angular_mask = (theta >= theta_min) | (theta <= theta_max)
+    mask = np.exp(-0.5 * (dist / spread) ** 2)
 
     # Apply random noise and smooth
-    # raw_noise = np.random.randn(*dist.shape) * gaussian_mask * angular_mask
-    raw_noise = np.random.randn(res, res, res) * angular_mask
+    raw_noise = np.random.randn(*dist.shape) * mask
     smoothed_noise = gaussian_filter(raw_noise, sigma=sigma)
 
     # Return as a 3D vector field (same noise for x/y/z directions)
     noise_vector_field = np.stack([smoothed_noise]*3) * strength
     return noise_vector_field
+'''
 
 
 def deform_vertices(verts, x_warp, resolution):
@@ -154,7 +143,9 @@ def generate_ground_truth(label, x, verts, faces, radius, surface="bump"):
         bump = compute_bump_field(x, angle, radius, bump_width=0.01, bump_height=15.0)
         x_warp = -np.stack(np.gradient(bump))
     elif surface == "noise":
-        x_warp = compute_correlated_noise(x, angle, radius, seed = 1)
+        # x_warp = compute_correlated_noise(x, angle, radius, seed = 1)
+        theta_max = label + (2*pi/3) 
+        x_warp = compute_correlated_noise(x, radius, angle, theta_max, 
         
     deformed_verts = deform_vertices(verts.copy(), x_warp, x.shape[-1])
     mesh = trimesh.Trimesh(vertices=deformed_verts, faces=faces, process=False)
@@ -191,7 +182,10 @@ def generate_torus(num=99, variable=None, surface="bump"):
     angle = None
     second_angle = None
     corrn_strength = None
-    corrn_spread = None
+    #corrn_spread = None
+    corrn_zone = None
+    corrn_second = None
+    
 
     #Create an array of 100 points from -1 to 1 
     coords = np.linspace(-1, 1, resolution)
@@ -214,8 +208,8 @@ def generate_torus(num=99, variable=None, surface="bump"):
 
     for i in range(num):
         # randomize noise, bump_size, thickness
-        noise_scale = random.randint(18, 20)
-        noise_strength = random.randint(6, 10)
+        noise_scale = random.randint(18, 22)
+        noise_strength = random.randint(6, 12)
         verts = verts_standard.copy()
         norms = normals_standard.copy()
 
@@ -237,7 +231,8 @@ def generate_torus(num=99, variable=None, surface="bump"):
 
         elif (surface == "noise"):
             corrn_stats = noisy_surface(i, variable, x, radius, seed)
-            x_corrn_warp, corrn_strength, corrn_spread, angle, second_angle = corrn_stats
+            #x_corrn_warp, corrn_strength, corrn_spread, angle, second_angle = corrn_stats
+            x_corrn_warp, corrn_strength, corrn_zone, corrn_second = corrn_stats
             x_warp += x_corrn_warp
         
         # Interpolate and deform
@@ -258,7 +253,9 @@ def generate_torus(num=99, variable=None, surface="bump"):
             "primary_angle": angle,
             "secondary_angle": second_angle if (variable in ["secondangle", "both"]) else None,
             "corr_noise_strength": corrn_strength,
-            "corr_noise_spread": corrn_spread,
+            #"corr_noise_spread": corrn_spread,
+            "corr_noise_zone": corrn_zone,
+            "corr_noise_second": corrn_second,
         }
     
     # Save batch ID & torus metadata
@@ -304,7 +301,6 @@ def bumpy_surface(
     
     return x_bwarp, bump_width, bump_height, angle, second_angle
 
-'''
 def noisy_surface(
     iteration,
     variable,
@@ -334,21 +330,19 @@ def noisy_surface(
     '''
 def noisy_surface(iteration, variable, x, radius, seed=None):
     center_angle = (2 * np.pi / 3) * (iteration % 3)
-    s_spread = 0.1
-    strength = 5.0
+    spread = 0.1
+    strength = 10.0
     sigma = 1.0
-    a_spread = np.pi/12
-    
-    x_cwarp = compute_correlated_noise(x, center_angle, radius, angular_spread=a_spread, spatial_spread=s_spread, strength=strength, sigma=sigma, seed=seed)
+    x_cwarp = compute_correlated_noise(x, center_angle, radius, spread=spread, strength=strength, sigma=sigma, seed=seed)
 
     second_angle = None
     if variable in ["secondangle", "both"]:
         second_angle = random.uniform(0, 2*np.pi)
-        second_warp = compute_correlated_noise(x, second_angle, radius, angular_spread=a_spread, spatial_spread=s_spread, strength=strength, sigma=sigma, seed=seed)
+        second_warp = compute_correlated_noise(x, second_angle, radius, spread=spread, strength=strength, sigma=sigma, seed=seed)
         x_cwarp += second_warp
 
-    return x_cwarp, strength, s_spread, center_angle, second_angle
-
+    return x_cwarp, strength, spread, center_angle, second_angle
+'''
     
 
 if __name__ == "__main__":

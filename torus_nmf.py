@@ -172,7 +172,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99,  variable="thickness", surface="noise")
+        torus_gen.generate_torus(num=99,  variable=None, surface="noise")
     '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -566,34 +566,69 @@ def normalize_matrix(T, metadata_path="./torus_data/metadata.pkl", method="globa
 
 # EVALUATION AND OUTPUT =======================================================================================================
 
-def extract_ground_truth_masks(num_components, gt_dir="./torus_data/", ref_file="torus_000.ply", prefix="groundtruth_", threshold=0.01):
+def extract_ground_truth_masks(
+    num_components,
+    metadata_path="./torus_data/metadata.pkl",
+    gt_dir="./torus_data/",
+    ref_file="torus_000.ply",
+    prefix="groundtruth_",
+    threshold=0.01):
     """
     Extracts binary masks from ground truth tori by comparing vertex displacements to the reference torus.
     Returns binary masks for each ground truth component (same shape as H[i]).
     """
     masks = []
-
+    
+    with open(metadata_path, "rb") as f:
+        _, surface, _, _ = pickle.load(f) 
+    
     # Load reference torus
     ref_path = os.path.join(gt_dir, ref_file)
     ref_mesh = trimesh.load_mesh(ref_path)
     ref_verts = ref_mesh.vertices
     ref_normals = ref_mesh.vertex_normals
+    
+    if surface == "bump":
+        for i in range(num_components):
+            gt_path = os.path.join(gt_dir, f"{prefix}{i}.ply")
+            if not os.path.isfile(gt_path):
+                raise FileNotFoundError(f"Missing ground truth torus: {gt_path}")
+            
+            gt_mesh = trimesh.load_mesh(gt_path)
+            gt_verts = gt_mesh.vertices
+    
+            # Compute signed displacements
+            displacement_vectors = gt_verts - ref_verts
+            signed_displacements = np.einsum('ij,ij->i', displacement_vectors, ref_normals)
+    
+            # Threshold to produce binary mask
+            mask = (signed_displacements > threshold).astype(int)
+            masks.append(mask)
 
-    for i in range(num_components):
-        gt_path = os.path.join(gt_dir, f"{prefix}{i}.ply")
-        if not os.path.isfile(gt_path):
-            raise FileNotFoundError(f"Missing ground truth torus: {gt_path}")
-        
-        gt_mesh = trimesh.load_mesh(gt_path)
-        gt_verts = gt_mesh.vertices
+    elif surface == "noise":
+        # Compute theta angles from (x, y) coordinates of ref_verts
+        X, Z = ref_verts[:, 0], ref_verts[:, 2]
+        theta = np.mod(np.arctan2(Z, X), 2 * np.pi)
 
-        # Compute signed displacements
-        displacement_vectors = gt_verts - ref_verts
-        signed_displacements = np.einsum('ij,ij->i', displacement_vectors, ref_normals)
+        # Define center angles and angular bands (+-pi/12) for 3 regions
+        width = np.pi / 12
+        for i in range(num_components):
+            center = (2 * np.pi / 3) * i
+            theta_min = (center - width) % (2 * np.pi)
+            theta_max = (center + width) % (2 * np.pi)
+            #if theta_max == 0:   theta_max = (2 * np.pi)
 
-        # Threshold to produce binary mask
-        mask = (signed_displacements > threshold).astype(int)
-        masks.append(mask)
+            # Handle wrap-around case
+            if theta_min < theta_max:
+                mask = (theta >= theta_min) & (theta < theta_max)
+            else:
+                mask = (theta >= theta_min) | (theta < theta_max)
+
+            masks.append(mask.astype(int))
+
+    else:
+        raise ValueError(f"Unknown surface type '{surface}' in metadata")
+
 
     return masks
 
