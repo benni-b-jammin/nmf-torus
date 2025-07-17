@@ -43,7 +43,7 @@ torus_nmf.py  - this script will attempt to utilize nonnegative matrix
                 https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
-Last Modified:  Jul 04, 2025
+Last Modified:  Jul 17, 2025
 '''
 
 # Standard library imports
@@ -61,6 +61,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import trimesh
+from trimesh.graph import vertex_adjacency_graph
+import networkx as nx
 from matplotlib.colors import Normalize
 from scipy.optimize import linear_sum_assignment
 from scipy.stats import pearsonr
@@ -72,6 +74,8 @@ from sklearn.preprocessing import normalize
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
 from scipy.spatial.distance import dice
+import scipy.sparse as sp
+from scipy.sparse.linalg import cg
 
 # Local application imports
 import torus_gen
@@ -133,6 +137,9 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None,
     
     # Get ground truth masks
     ground_truth_masks = extract_ground_truth_masks(H.shape[0], threshold=0.015)
+
+    # Smooth H for consistent results - TODO: check if this is okay
+    #H = smooth_H(H)
     # visualize_nmf_torus(W, H, ground_truth_masks)
     visualize_nmf_torus(W, H)
     eval_data = evaluate_nmf_labels(T, W, H, torus_labels, filenames, ground_truth_masks)
@@ -172,7 +179,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99,  variable=None, surface="noise")
+        torus_gen.generate_torus(num=99,  variable="both", surface="noise")
     '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -493,6 +500,42 @@ def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.pl
     combined_mesh = ref_mesh.copy()
     combined_mesh = colour_mesh_vertices(combined_mesh, combined_displacements)
     combined_mesh.export(os.path.join(out_path, "nmf_combined.ply"))
+
+'''
+def ref_laplacian(ref_path="./torus_data/torus_000.ply"):
+    '''
+    # Compute laplacian of the reference torus for use in manifold regularization
+    '''
+    
+    try:
+        mesh = trimesh.load_mesh(ref_path)
+        G = vertex_adjacency_graph(mesh)     
+        A = nx.adjacency_matrix(G)
+        d = A.sum(axis=1).flatten()                      
+        D = sp.diags(d)                           # Degree matrix
+        L = D - A                                 # Unnormalized Laplacian
+        return L
+
+    except Exception as e:
+        print(f"Could not compute Laplacian matrix of {ref_path}: {e}")
+        sys.exit(2)
+
+
+def smooth_H(H, alpha=0.1, iterations=10):
+    '''
+    # Manifold regularization of H in post-processing using the Laplacian
+    # H <- H @ (I - alpha * L)^t
+    '''
+    L = ref_laplacian()
+    n = L.shape[0]
+    I = sp.identity(n)
+    smoothing_matrix = I - alpha * L  # diffusion matrix
+
+    H_smoothed = H.copy()
+    for _ in range(iterations):
+        H_smoothed = H_smoothed @ smoothing_matrix.T  # right-multiply since H is (k, n)
+    return H_smoothed
+'''   
 
 
 # NORMALIZATION ===============================================================================================================

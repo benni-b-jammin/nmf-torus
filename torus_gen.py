@@ -134,7 +134,7 @@ def compute_correlated_noise(x, center_angle, radius, angular_spread=np.pi/12, s
 
     # Apply random noise and smooth
     # raw_noise = np.random.randn(*dist.shape) * gaussian_mask * angular_mask
-    raw_noise = np.random.randn(res, res, res) * angular_mask
+    raw_noise = np.random.randn(*dist.shape) * angular_mask
     smoothed_noise = gaussian_filter(raw_noise, sigma=sigma)
 
     # Return as a 3D vector field (same noise for x/y/z directions)
@@ -335,7 +335,7 @@ def noisy_surface(
 def noisy_surface(iteration, variable, x, radius, seed=None):
     center_angle = (2 * np.pi / 3) * (iteration % 3)
     s_spread = 0.1
-    strength = 5.0
+    strength = 3.0
     sigma = 1.0
     a_spread = np.pi/12
     
@@ -344,7 +344,7 @@ def noisy_surface(iteration, variable, x, radius, seed=None):
     second_angle = None
     if variable in ["secondangle", "both"]:
         second_angle = random.uniform(0, 2*np.pi)
-        second_warp = compute_correlated_noise(x, second_angle, radius, angular_spread=a_spread, spatial_spread=s_spread, strength=strength, sigma=sigma, seed=seed)
+        second_warp = compute_correlated_noise(x, second_angle, radius, angular_spread=a_spread, spatial_spread=s_spread, strength=(strength/2), sigma=sigma, seed=seed)
         x_cwarp += second_warp
 
     return x_cwarp, strength, s_spread, center_angle, second_angle
