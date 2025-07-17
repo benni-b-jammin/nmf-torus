@@ -1,46 +1,84 @@
 #!/usr/bin/env python3
 '''
-torus_nmf.py  - this script will attempt to utilize nonnegative matrix
-                factorization to identify subtypes of torus data. Torus
-                coordinate data is arrange in a matrix for NMF to categorize;
-                resulting encoding matrix is clustered to determine if distinct
-                subtypes can be determined
-                
-                Torus data is created/retrieved in the following ways:
-                 -> .npy file exists:
-                        load matrix T from file
-                 -> no .npy, but .ply files found:
-                        load all .ply files, arrange tori data into T matrix,
-                        save T to .npy file
-                 -> no .ply files: 
-                        generate all .ply files using the torus_gen.py script,
-                        repeat above
-                 -> hard reset mode enabled:
-                        regenerate all .ply files, as above
-                
-                Using tori data from .npy file (generates if none exist), this 
-                script loads torus data, computes displacements of each w.r.t. 
-                a reference torus, and arranges displacement data in a matrix 
-                to compute a matrix factorization using traditional NMF or OPNMF:
-                    
-                        T is approximated by WH = V
+torus_nmf.py
 
-                    T = original matrix; torus coordinate data represented in
-                        each row via [t1, t2, ..., tm]
-                        dimension n x m matrix, n tori, m displacements in each
-                    W = encoding matrix for torus data: deduced via NMF to
-                        show latent subtype representation of each torus
-                        dimension n x k, n tori, k optimal rank of encoding
-                    H = component matrix of torus data: latent basis shape of 
-                        coordinate data
-                        dimension k x n
-                    V = approximation of T matrix from derived W & H
-                        dimension n x m, same as T
-                    
+This script performs subtype discovery on synthetic torus surface data using 
+Nonnegative Matrix Factorization (NMF) or Orthogonal Projective NMF (OPNMF). 
+The displacements of each torus with respect to a common reference are used 
+to simulate cortical thickness variation, enabling factorization-based 
+subtyping and regional pattern discovery.
 
-                Note: credit for original torus generation can be given to Khoi
-                and his work in continuous variation in torus generation:
-                https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
+--------------------------------------------------------------------------
+Torus Data Handling Pipeline:
+--------------------------------------------------------------------------
+The torus data is obtained/generated via the following logic:
+  -> .npy file exists:
+        - Load displacement matrix T directly from file
+  -> no .npy, but .ply files found:
+        - Load all .ply meshes, compute displacements to reference
+        - Construct matrix T and save to .npy for future runs
+  -> no .ply files found:
+        - Call torus_gen.py to generate synthetic tori (bumps or noise)
+        - Repeat displacement matrix generation as above
+  -> hard reset mode enabled:
+        - Force regeneration of all .ply files and matrix T
+
+--------------------------------------------------------------------------
+Matrix Factorization:
+--------------------------------------------------------------------------
+The matrix T is factorized as:
+
+        T ≈ W @ H
+
+Where:
+    T  : (n × m) matrix of vertex displacements for n tori, m vertices
+    W  : (n × k) encoding matrix of latent subtype weights
+    H  : (k × m) component matrix of spatial patterns (regions/components)
+    V  : (n × m) reconstruction of T from W and H
+
+Two decomposition modes are supported:
+  - Traditional NMF using scikit-learn
+  - OPNMF using the opnmf package from https://github.com/juaml/opnmf
+
+--------------------------------------------------------------------------
+Surface Types:
+--------------------------------------------------------------------------
+Two synthetic surface configurations are available:
+  1. "bump": Localized Gaussian protrusions placed at fixed angular locations
+  2. "noise": Correlated noise injected into angular bands around the torus
+
+--------------------------------------------------------------------------
+Ground Truth & Evaluation:
+--------------------------------------------------------------------------
+Ground truth regions are defined per surface type:
+  - For "bump": Threshold on signed vertex displacements from reference
+  - For "noise": Angular bands used to define binary masks
+
+Evaluation metrics include:
+  - Component-to-mask Pearson correlation
+  - Dice score between binarized components and ground truth masks
+  - Classification accuracy and confusion matrix (via W label assignments)
+  - AUC (OVO) score for multiclass subtype prediction
+  - Reconstruction and MSE errors
+
+--------------------------------------------------------------------------
+Visualization:
+--------------------------------------------------------------------------
+The following visual outputs are generated:
+  - Colored .ply meshes for each H component
+  - Combined component map from max(H) across components
+  - Optional overlays of ground truth regions for visual inspection
+
+--------------------------------------------------------------------------
+Optional Enhancements (under development):
+--------------------------------------------------------------------------
+  - Laplacian smoothing of H components (to enforce spatial coherence)
+  - Manifold regularization (e.g., graph Laplacian on component support)
+  - Regression with clinical variables (simulated) for subtype interpretation
+
+Note: credit for original torus generation can be given to Khoi and his work 
+in continuous variation in torus generation:
+https://github.com/Khoi-Nguyen-Xuan/Torus_Bump_Generation
 
 Authors:        Benji Lawrence
 Last Modified:  Jul 17, 2025
@@ -137,6 +175,7 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None,
     
     # Get ground truth masks
     ground_truth_masks = extract_ground_truth_masks(H.shape[0], threshold=0.015)
+    visualize_threshold_masks(ground_truth_masks)
 
     # Smooth H for consistent results - TODO: check if this is okay
     #H = smooth_H(H)
@@ -179,7 +218,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99,  variable="both", surface="noise")
+        torus_gen.generate_torus(num=99,  variable="both", surface="bump")
     '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -469,7 +508,7 @@ def colour_mesh_vertices(mesh, displacements=None, mask=None):
     return mesh
 
 
-def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
+def visualize_nmf_torus(W, H, ref_path="./torus_data/torus_000.ply", out_path="./results/"):
     ''' 
     Visualizes NMF component heatmaps on the reference torus mesh without
     altering the geometry. Exports colored meshes for each component and
@@ -489,10 +528,7 @@ def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.pl
         displacements = H[i, :]  # shape: (n_vertices,)
         
         heatmap_mesh = ref_mesh.copy()
-        if gt_masks is not None:
-            heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements, gt_masks[i])
-        else:
-            heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements)
+        heatmap_mesh = colour_mesh_vertices(heatmap_mesh, displacements)
         heatmap_mesh.export(os.path.join(out_path, f"nmf_component_{i}.ply"))
 
     # Combined component heatmap
@@ -501,11 +537,32 @@ def visualize_nmf_torus(W, H, gt_masks=None, ref_path="./torus_data/torus_000.pl
     combined_mesh = colour_mesh_vertices(combined_mesh, combined_displacements)
     combined_mesh.export(os.path.join(out_path, "nmf_combined.ply"))
 
+
+def visualize_threshold_masks(masks, ref_path="./torus_data/torus_000.ply", out_path="./results/gt_masks/"):
+    """
+    Visualizes ground truth binary masks on the reference torus mesh.
+    Each mask is rendered on a separate mesh with red (1) and gray (0) colors.
+    """
+    os.makedirs(out_path, exist_ok=True)
+
+    ref_mesh = trimesh.load_mesh(ref_path)
+    faces = ref_mesh.faces
+    verts = ref_mesh.vertices
+
+    for i, mask in enumerate(masks):
+        # Color red where mask == 1, gray otherwise
+        vertex_colors = np.tile([150, 150, 150], (len(verts), 1))  # gray
+        vertex_colors[mask == 1] = [255, 0, 0]  # red
+
+        color_mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_colors=vertex_colors, process=False)
+        color_mesh.export(os.path.join(out_path, f"ground_truth_mask_{i}.ply"))
+
+
 '''
 def ref_laplacian(ref_path="./torus_data/torus_000.ply"):
     '''
     # Compute laplacian of the reference torus for use in manifold regularization
-    '''
+'''
     
     try:
         mesh = trimesh.load_mesh(ref_path)
@@ -525,7 +582,7 @@ def smooth_H(H, alpha=0.1, iterations=10):
     '''
     # Manifold regularization of H in post-processing using the Laplacian
     # H <- H @ (I - alpha * L)^t
-    '''
+'''
     L = ref_laplacian()
     n = L.shape[0]
     I = sp.identity(n)
@@ -740,7 +797,8 @@ def evaluate_nmf_labels(T, W, H, labels, filenames, ground_truth_masks=None, ver
         corrs = [pearsonr(H_reordered[i], ground_truth_masks[i])[0] for i in range(k)]
         dice_scores = []
         for i in range(k):
-            pred_binary = (H_reordered[i] > 0.1).astype(int)
+            threshold = np.percentile(H_reordered[i], 90)  # top 10% of weights
+            pred_binary = (H_reordered[i] > threshold).astype(int)
             true_binary = ground_truth_masks[i].astype(int)
             dice_score = 1 - dice(pred_binary, true_binary)  # convert from distance to coefficient
             dice_scores.append(dice_score)
