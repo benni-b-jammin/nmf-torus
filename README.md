@@ -1,19 +1,15 @@
 # Categorizing Torus Data using Non-negative Matrix Factorization (NMF)
 
 
-This project explores the use of **Nonnegative Matrix Factorization (NMF)** and **Orthogonal Projective NMF (OPNMF)** to discover latent spatial patterns and subtypes in **synthetic torus data**, simulating cortical thickness variation across subjects.
+This project explores the use of **Nonnegative Matrix Factorization (NMF)** and **Orthogonal Projective NMF (OPNMF)** to discover latent spatial patterns and subtypes in **synthetic torus data**. This will be used as a basis to justify the use of (OP)NMF in the analysis of cortical thickness MRI brain data.
 
 ---
 
 ## Project Structure
 ```bash
 .
-├── torus_nmf.py              # Main NMF/OPNMF pipeline
+├── torus_nmf.py              # Main NMF/OPNMF pipeline & utility functions (visualization, evaluation)
 ├── torus_gen.py              # Torus mesh generator for bump/noise patterns
-├── utils/
-│   ├── visualization.py      # Heatmap + mask export utilities
-│   ├── evaluation.py         # Dice, correlation, AUC, etc.
-│   └── preprocessing.py      # Displacement calculation, smoothing, etc.
 ├── torus_data/               # Contains .ply meshes and precomputed .npy matrix
 ├── results/                  # Exported colored meshes and evaluation output
 └── README.md                 # You are here
@@ -23,7 +19,7 @@ This project explores the use of **Nonnegative Matrix Factorization (NMF)** and 
 
 ## Purpose
 
-This project simulates **geometric brain-like data** on a torus surface and applies NMF to uncover:
+This project provides an analog that simulates **geometric brain-like data** on a torus surface and applies NMF to uncover:
 
 - Latent spatial components (regions)
 - Subtypes of subjects (encoding weights)
