@@ -171,11 +171,12 @@ def compute_torus_nmf (nmf_mode='opnmf', optimal_r=3, init="nndsvd", reset=None,
     print(f"V Matrix computed:\n{V}\nShape: {V.shape}")
     subtype_labels = W.argmax(axis=1) 
     
-    print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, MeanL {np.mean(T)}")
+    print(f"T values - Min: {np.min(T)}, Max: {np.max(T)}, Mean: {np.mean(T)}")
     
     # Get ground truth masks
     ground_truth_masks = extract_ground_truth_masks(H.shape[0], threshold=0.015)
     visualize_threshold_masks(ground_truth_masks)
+    print(f"ground_truth_masks = {ground_truth_masks}")
 
     # Smooth H for consistent results - TODO: check if this is okay
     #H = smooth_H(H)
@@ -218,7 +219,7 @@ def create_T_matrix(matrix_name, labels, filenames, reset):
             print("Hard Reset selected - regenerating torus files...")
         else:
             print("No torus files - generating...")
-        torus_gen.generate_torus(num=99,  variable="both", surface="bump")
+        torus_gen.generate_torus(num=99,  variable="both", surface="noise")
     '''
     ply_files = sorted([
         f for f in os.listdir(torus_dir)
@@ -551,6 +552,11 @@ def visualize_threshold_masks(masks, ref_path="./torus_data/torus_000.ply", out_
 
     for i, mask in enumerate(masks):
         # Color red where mask == 1, gray otherwise
+        mask = np.asarray(mask)  # Ensure array format
+        print(f"Mask {i} sum: {np.sum(mask)} (unique values: {np.unique(mask)})")
+        if mask.shape[0] != len(verts):
+            raise ValueError(f"Mask length {len(mask)} does not match vertex count {len(verts)}")
+
         vertex_colors = np.tile([150, 150, 150], (len(verts), 1))  # gray
         vertex_colors[mask == 1] = [255, 0, 0]  # red
 
@@ -707,11 +713,17 @@ def extract_ground_truth_masks(
 
     elif surface == "noise":
         # Compute theta angles from (x, y) coordinates of ref_verts
-        X, Z = ref_verts[:, 0], ref_verts[:, 2]
-        theta = np.mod(np.arctan2(Z, X), 2 * np.pi)
+        # Center the torus
+        centered_verts = ref_verts - np.mean(ref_verts, axis=0)
+        # Compute theta from X-Z plane
+        Y, Z = centered_verts[:, 1], centered_verts[:, 2]
+        theta = np.mod(np.arctan2(Z, Y), 2 * np.pi)
 
-        # Define center angles and angular bands (+-pi/12) for 3 regions
-        width = np.pi / 12
+        print("Theta range:", np.min(theta), np.max(theta))
+        print("Theta unique values:", np.unique(np.round(theta, 3)))
+
+        # Define center angles and angular bands (+-pi/3) for 3 regions
+        width = np.pi/3
         for i in range(num_components):
             center = (2 * np.pi / 3) * i
             theta_min = (center - width) % (2 * np.pi)
@@ -724,7 +736,7 @@ def extract_ground_truth_masks(
             else:
                 mask = (theta >= theta_min) | (theta < theta_max)
 
-            masks.append(mask.astype(int))
+            masks.append(np.array(mask.astype(int)))
 
     else:
         raise ValueError(f"Unknown surface type '{surface}' in metadata")
